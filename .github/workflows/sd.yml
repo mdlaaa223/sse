@@ -40,9 +40,7 @@ jobs:
       
       - name: Configurar VNC con contraseña
         run: |
-          # Crear contraseña para VNC (sin esto no puedes conectarte)
           VNC_PASSWORD="macos123"
-          echo "runner:$VNC_PASSWORD" | sudo chpasswd
           
           # Habilitar ARD/VNC con configuración completa
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
