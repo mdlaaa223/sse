@@ -1,0 +1,194 @@
+name: macOS Build Server - KMP & .NET MAUI
+
+on:
+  workflow_dispatch:
+
+jobs:
+  macos-build-server:
+    runs-on: macos-latest
+    
+    steps:
+      - name: Información del Sistema
+        run: |
+          echo "🖥️  Sistema: macOS $(sw_vers -productVersion)"
+          echo "🔧 Arquitectura: $(uname -m)"
+          echo "⏰ Inicio: $(date)"
+      
+      - name: Configurar SSH
+        run: |
+          sudo systemsetup -setremotelogin on
+          
+          # En GitHub Actions runners, usamos el usuario actual sin cambiar password
+          # El acceso se hará via SSH keys o tmate
+          
+          echo "✅ SSH habilitado - Usuario: runner"
+          echo "📝 Nota: Usa tmate para acceso seguro (aparecerá más adelante)"
+      
+      - name: Instalar herramientas esenciales
+        run: |
+          echo "📦 Instalando Homebrew packages..."
+          brew install ngrok wget curl jq
+          echo "✅ Herramientas instaladas"
+      
+      - name: Instalar .NET SDK (para .NET MAUI)
+        run: |
+          echo "📦 Instalando .NET SDK..."
+          brew install --cask dotnet-sdk
+          
+          dotnet --version
+          
+          sudo dotnet workload install maui --skip-manifest-update
+          sudo dotnet workload install ios --skip-manifest-update
+          sudo dotnet workload install maccatalyst --skip-manifest-update
+          
+          echo "✅ .NET SDK y MAUI instalados"
+      
+      - name: Configurar Xcode y herramientas iOS
+        run: |
+          echo "🔧 Configurando Xcode..."
+          
+          sudo xcodebuild -license accept
+          
+          sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+          
+          xcodebuild -version
+          xcrun simctl list devices
+          
+          echo "✅ Xcode configurado"
+      
+      - name: Instalar dependencias para KMP
+        run: |
+          echo "📦 Instalando herramientas para Kotlin Multiplatform..."
+          
+          brew install openjdk@17
+          sudo ln -sfn /opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk /Library/Java/JavaVirtualMachines/openjdk-17.jdk
+          
+          sudo gem install cocoapods
+          
+          java -version
+          pod --version
+          
+          echo "✅ Herramientas KMP instaladas"
+      
+      - name: Configurar ngrok
+        env:
+          NGROK_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
+        run: |
+          if [ -z "$NGROK_TOKEN" ]; then
+            echo "❌ ERROR: NGROK_AUTH_TOKEN no configurado"
+            exit 1
+          fi
+          
+          ngrok config add-authtoken $NGROK_TOKEN
+          echo "✅ ngrok configurado"
+      
+      - name: Iniciar túnel SSH
+        run: |
+          ngrok tcp 22 --log=stdout > ngrok.log &
+          sleep 10
+          
+          NGROK_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
+          NGROK_HOST=$(echo $NGROK_URL | sed 's/tcp:\/\///' | cut -d':' -f1)
+          NGROK_PORT=$(echo $NGROK_URL | sed 's/tcp:\/\///' | cut -d':' -f2)
+          
+          echo "=========================================="
+          echo "🎉 SERVIDOR DE BUILD macOS LISTO"
+          echo "=========================================="
+          echo ""
+          echo "📡 CONEXIÓN SSH:"
+          echo "   Host: $NGROK_HOST"
+          echo "   Puerto: $NGROK_PORT"
+          echo "   Usuario: runner"
+          echo "   Password: MacOSBuild2024!"
+          echo ""
+          echo "💻 Comando SSH:"
+          echo "   ssh runner@$NGROK_HOST -p $NGROK_PORT"
+          echo ""
+          echo "=========================================="
+          echo "🔧 CONFIGURACIÓN PARA TUS IDEs:"
+          echo "=========================================="
+          echo ""
+          echo "📱 ANDROID STUDIO (KMP):"
+          echo "   1. Settings > Build > Kotlin Multiplatform"
+          echo "   2. iOS Build Server: $NGROK_HOST"
+          echo "   3. Port: $NGROK_PORT"
+          echo "   4. Username: runner"
+          echo "   5. Password: MacOSBuild2024!"
+          echo ""
+          echo "🪟 VISUAL STUDIO 2022 (.NET MAUI):"
+          echo "   1. Tools > Options > Xamarin > iOS Settings"
+          echo "   2. Remote macOS Build Host"
+          echo "   3. Add: $NGROK_HOST:$NGROK_PORT"
+          echo "   4. Username: runner"
+          echo "   5. Password: MacOSBuild2024!"
+          echo ""
+          echo "=========================================="
+          echo "📋 INFORMACIÓN DEL SISTEMA:"
+          echo "=========================================="
+          echo "   Xcode: $(xcodebuild -version | head -1)"
+          echo "   .NET: $(dotnet --version)"
+          echo "   Java: $(java -version 2>&1 | head -1)"
+          echo "   Ruby: $(ruby -v | cut -d' ' -f2)"
+          echo "   CocoaPods: $(pod --version)"
+          echo "=========================================="
+          
+          echo "NGROK_HOST=$NGROK_HOST" >> $GITHUB_ENV
+          echo "NGROK_PORT=$NGROK_PORT" >> $GITHUB_ENV
+      
+      - name: Configurar servidor de build .NET MAUI
+        run: |
+          echo "🔧 Configurando servicios para .NET MAUI..."
+          
+          mkdir -p ~/builds
+          
+          chmod 755 ~/builds
+          
+          echo "✅ Servidor .NET MAUI listo"
+      
+      - name: Crear scripts de utilidad
+        run: |
+          cat > ~/check-system.sh << 'SCRIPT1'
+          #!/bin/bash
+          echo "====== ESTADO DEL SISTEMA ======"
+          echo "CPU: $(sysctl -n machdep.cpu.brand_string)"
+          echo "RAM: $(sysctl -n hw.memsize | awk '{print $1/1024/1024/1024 " GB"}')"
+          echo "Disco disponible: $(df -h / | awk 'NR==2 {print $4}')"
+          echo ""
+          echo "====== HERRAMIENTAS ======"
+          echo "Xcode: $(xcodebuild -version | head -1)"
+          echo ".NET: $(dotnet --version)"
+          echo "Java: $(java -version 2>&1 | head -1)"
+          echo "CocoaPods: $(pod --version)"
+          echo ""
+          echo "====== SIMULADORES iOS ======"
+          xcrun simctl list devices | grep iPhone
+          echo ""
+          echo "====== PROCESOS DE BUILD ======"
+          ps aux | grep -E 'xcodebuild|dotnet|gradle' | grep -v grep
+          SCRIPT1
+          chmod +x ~/check-system.sh
+          
+          cat > ~/clean-builds.sh << 'SCRIPT2'
+          #!/bin/bash
+          echo "🧹 Limpiando builds antiguos..."
+          rm -rf ~/Library/Developer/Xcode/DerivedData/*
+          rm -rf ~/builds/*
+          dotnet clean || true
+          echo "✅ Limpieza completada"
+          SCRIPT2
+          chmod +x ~/clean-builds.sh
+          
+          echo "✅ Scripts de utilidad creados"
+      
+      - name: Acceso remoto con tmate
+        uses: mxschmitt/action-tmate@v3
+        with:
+          limit-access-to-actor: true
+      
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "🧹 Limpiando..."
+          pkill ngrok || true
+          sudo systemsetup -setremotelogin off
+          echo "✅ Limpieza completada"
