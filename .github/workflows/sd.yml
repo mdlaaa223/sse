@@ -36,8 +36,17 @@ jobs:
       - name: Configurar contraseña para usuario runner
         run: |
           # Establecer contraseña para el usuario runner (necesario para Pair to Mac)
-          sudo dscl . -passwd /Users/runner "runner123"
-          echo "✅ Contraseña del usuario runner configurada: runner123"
+          # Usar sysadminctl que permite cambiar sin contraseña anterior
+          sudo sysadminctl -resetPasswordFor runner -newPassword runner123 -adminUser runner 2>/dev/null || \
+          sudo dscl . -passwd /Users/runner "" "runner123" 2>/dev/null || \
+          echo "runner123" | sudo passwd runner 2>/dev/null || \
+          echo "⚠️ No se pudo establecer contraseña automáticamente"
+          
+          echo "✅ Intentando configurar contraseña: runner123"
+          echo ""
+          echo "Si no funcionó, ejecuta manualmente en SSH:"
+          echo "  sudo passwd runner"
+          echo "  (deja la contraseña anterior vacía y pon: runner123)"
       
       - name: Crear carpeta para screenshots
         run: |
