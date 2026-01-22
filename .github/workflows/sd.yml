@@ -38,14 +38,14 @@ jobs:
           sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
           echo "✅ Xcode configurado"
       
-      - name: Configurar VNC
+      - name: Instalar noVNC para acceso web
         run: |
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -activate -configure -access -on \
-            -restart -agent -privs -all \
-            -allowAccessFor -allUsers
+          brew install novnc websockify
           
-          echo "✅ VNC habilitado"
+          # Iniciar websockify en background
+          websockify -D --web=/opt/homebrew/share/novnc/ 6080 localhost:5900
+          
+          echo "✅ noVNC iniciado en puerto 6080"
       
       - name: Habilitar SSH
         run: |
@@ -92,61 +92,35 @@ jobs:
         run: |
           echo ""
           echo "=========================================="
-          echo "📋 CÓMO CONECTARTE DESDE WINDOWS"
+          echo "📋 ACCESO AL ESCRITORIO macOS"
           echo "=========================================="
           echo ""
-          echo "🎯 OPCIÓN 1 - SSH con Port Forwarding (RECOMENDADO)"
+          echo "🌐 MÉTODO 1 - VNC en el NAVEGADOR (MÁS FÁCIL)"
           echo "----------------------------------------"
           echo ""
-          echo "Esta es la forma MÁS FÁCIL de ver los simuladores:"
+          echo "1. En tu sesión SSH actual, ejecuta:"
+          echo "   websockify --web=/opt/homebrew/share/novnc/ 6080 localhost:5900"
           echo ""
-          echo "1. Busca arriba en los logs el comando SSH de tmate"
-          echo "   Se ve algo así: ssh xxxxx@nyc1.tmate.io"
+          echo "2. En otra terminal de Windows:"
+          echo "   ssh -L 6080:localhost:6080 BxVPb8zZrSBVZjrfnq5nPtYpB@sfo2.tmate.io"
           echo ""
-          echo "2. En tu Windows PowerShell, ejecuta ese comando"
+          echo "3. Abre tu navegador: http://localhost:6080/vnc.html"
           echo ""
-          echo "3. Una vez conectado por SSH, ejecuta:"
-          echo "   open -a Simulator"
-          echo "   xcrun simctl boot 'iPhone 15'"
-          echo ""
-          echo "4. Para ver el simulador en tu Windows, sal del SSH"
-          echo "   y ejecuta (reemplaza con el comando real de tmate):"
-          echo "   ssh -L 5900:localhost:5900 xxxxx@nyc1.tmate.io"
-          echo ""
-          echo "5. Ahora abre VNC Viewer y conecta a: localhost:5900"
+          echo "4. Click en 'Connect'"
           echo ""
           echo "=========================================="
-          echo "🎯 OPCIÓN 2 - Usar Visual Studio desde Windows"
+          echo "🖥️ MÉTODO 2 - VNC Viewer (Alternativo)"
           echo "----------------------------------------"
           echo ""
-          echo "Para compilar apps .NET MAUI desde tu Windows:"
+          echo "En tu terminal actual (donde estás conectado):"
           echo ""
-          echo "1. Conéctate por SSH (comando tmate arriba)"
+          echo "1. Presiona: Enter"
+          echo "2. Presiona: ~ (tecla ALT + 126)"
+          echo "3. Presiona: C"
+          echo "4. Escribe: -L 5900:localhost:5900"
+          echo "5. Presiona Enter"
           echo ""
-          echo "2. En Visual Studio 2022:"
-          echo "   Tools > Options > Xamarin > iOS Settings"
-          echo "   Add Mac > localhost:22"
-          echo "   (después de hacer port forwarding SSH)"
-          echo ""
-          echo "3. Compila tu app desde Windows"
-          echo ""
-          echo "4. Conéctate por VNC para ver el simulador"
-          echo ""
-          echo "=========================================="
-          echo "💡 RESUMEN SIMPLE"
-          echo "=========================================="
-          echo ""
-          echo "1. Copia el comando SSH que aparece en los logs"
-          echo "   (busca 'SSH session' arriba)"
-          echo ""
-          echo "2. Ejecútalo en tu PowerShell"
-          echo ""
-          echo "3. Ya tienes acceso al macOS!"
-          echo ""
-          echo "4. Para VER el escritorio:"
-          echo "   - Sal del SSH"
-          echo "   - Reconecta con: ssh -L 5900:localhost:5900 [comando-tmate]"
-          echo "   - Abre VNC Viewer: localhost:5900"
+          echo "Luego abre VNC Viewer: localhost:5900"
           echo ""
           echo "=========================================="
       
