@@ -1,11 +1,11 @@
-name: macOS VNC - Simuladores iOS (Gratis)
+name: macOS 26 SSH - Simuladores iOS (Gratis)
 
 on:
   workflow_dispatch:
 
 jobs:
-  macos-vnc-server:
-    runs-on: macos-latest
+  macos-ssh-server:
+    runs-on: macos-26
     
     steps:
       - name: Información del Sistema
@@ -13,11 +13,6 @@ jobs:
           echo "🖥️  macOS $(sw_vers -productVersion)"
           echo "🔧 $(uname -m)"
           xcodebuild -version
-      
-      - name: Instalar herramientas
-        run: |
-          brew install cloudflared
-          echo "✅ Cloudflare Tunnel instalado"
       
       - name: Instalar .NET MAUI
         run: |
@@ -38,78 +33,16 @@ jobs:
           sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
           echo "✅ Xcode configurado"
       
-      - name: Configurar VNC con contraseña
+      - name: Configurar contraseña para usuario runner
         run: |
-          VNC_PASSWORD="macos123"
-          
-          # Habilitar ARD/VNC con configuración completa
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -activate -configure -access -on \
-            -restart -agent -privs -all \
-            -allowAccessFor -allUsers \
-            -clientopts -setvnclegacy -vnclegacy yes \
-            -clientopts -setvncpw -vncpw "$VNC_PASSWORD"
-          
-          # Iniciar el servicio de Screen Sharing
-          sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null || true
-          
-          # Esperar a que el servicio inicie
-          sleep 5
-          
-          # Verificar que el puerto 5900 esté escuchando
-          echo "🔍 Verificando puerto 5900..."
-          if lsof -i :5900 > /dev/null 2>&1; then
-            echo "✅ Puerto 5900 está escuchando"
-            lsof -i :5900
-          else
-            echo "⚠️ Puerto 5900 no está activo, intentando iniciar manualmente..."
-            # Reiniciar el agente ARD
-            sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -restart -agent
-            sleep 3
-            lsof -i :5900 || echo "❌ VNC no pudo iniciarse"
-          fi
-          
-          echo "=========================================="
-          echo "🔐 VNC CONFIGURADO"
-          echo "=========================================="
-          echo "Contraseña VNC: $VNC_PASSWORD"
-          echo "=========================================="
+          # Establecer contraseña para el usuario runner (necesario para Pair to Mac)
+          sudo dscl . -passwd /Users/runner "runner123"
+          echo "✅ Contraseña del usuario runner configurada: runner123"
       
-      - name: Habilitar SSH
+      - name: Crear carpeta para screenshots
         run: |
-          sudo systemsetup -setremotelogin on
-          echo "✅ SSH habilitado"
-      
-      - name: Iniciar túnel Cloudflare para VNC
-        run: |
-          cloudflared tunnel --url tcp://localhost:5900 > cloudflare_vnc.log 2>&1 &
-          sleep 10
-          
-          VNC_URL=$(grep -o 'https://.*\.trycloudflare.com' cloudflare_vnc.log | head -1)
-          
-          echo "=========================================="
-          echo "🎉 CONEXIÓN VNC LISTA"
-          echo "=========================================="
-          echo ""
-          echo "📺 URL VNC: $VNC_URL"
-          echo ""
-          echo "VNC_URL=$VNC_URL" >> $GITHUB_ENV
-      
-      - name: Iniciar túnel Cloudflare para SSH
-        run: |
-          cloudflared tunnel --url tcp://localhost:22 > cloudflare_ssh.log 2>&1 &
-          sleep 10
-          
-          SSH_URL=$(grep -o 'https://.*\.trycloudflare.com' cloudflare_ssh.log | head -1)
-          
-          echo "=========================================="
-          echo "🔐 CONEXIÓN SSH LISTA"
-          echo "=========================================="
-          echo ""
-          echo "📡 URL SSH: $SSH_URL"
-          echo "👤 Usuario: runner"
-          echo ""
-          echo "SSH_URL=$SSH_URL" >> $GITHUB_ENV
+          mkdir -p ~/Screenshots
+          echo "✅ Carpeta ~/Screenshots creada"
       
       - name: Usar tmate para acceso SSH
         uses: mxschmitt/action-tmate@v3
@@ -117,139 +50,112 @@ jobs:
         with:
           detached: true
       
-      - name: Mostrar instrucciones completas
+      - name: Mostrar instrucciones
         run: |
           echo ""
           echo "=========================================="
           echo "📋 CÓMO CONECTARTE DESDE WINDOWS"
           echo "=========================================="
           echo ""
-          echo "🔐 CONTRASEÑA VNC: macos123"
-          echo ""
-          echo "🎯 OPCIÓN 1 - SSH con Port Forwarding (RECOMENDADO)"
+          echo "🎯 OPCIÓN 1: SSH DIRECTO (Terminal)"
           echo "----------------------------------------"
           echo ""
-          echo "Esta es la forma MÁS FÁCIL de ver los simuladores:"
-          echo ""
-          echo "1. Busca arriba en los logs el comando SSH de tmate"
-          echo "   Se ve algo así: ssh xxxxx@nyc1.tmate.io"
-          echo ""
-          echo "2. En tu Windows PowerShell, ejecuta ese comando"
-          echo ""
-          echo "3. Una vez conectado por SSH, ejecuta:"
-          echo "   open -a Simulator"
-          echo "   xcrun simctl boot 'iPhone 15'"
-          echo ""
-          echo "4. Para ver el simulador en tu Windows, sal del SSH"
-          echo "   y ejecuta (reemplaza con el comando real de tmate):"
-          echo "   ssh -L 5900:localhost:5900 xxxxx@nyc1.tmate.io"
-          echo ""
-          echo "5. Ahora abre VNC Viewer y conecta a: localhost:5900"
+          echo "1. Busca arriba el comando: ssh xxxxx@xxx.tmate.io"
+          echo "2. Ejecútalo en PowerShell"
+          echo "3. ¡Ya tienes acceso al macOS!"
           echo ""
           echo "=========================================="
-          echo "🎯 OPCIÓN 2 - Usar Visual Studio desde Windows"
+          echo "🎯 OPCIÓN 2: VISUAL STUDIO 2022 (Pair to Mac)"
+          echo "=========================================="
+          echo ""
+          echo "Para emparejar Visual Studio con este Mac:"
+          echo ""
+          echo "PASO 1 - En PowerShell, ejecuta (reemplaza xxxxx con tu código tmate):"
+          echo "   ssh -L 22:localhost:22 xxxxx@xxx.tmate.io"
+          echo ""
+          echo "PASO 2 - Deja esa ventana abierta (mantiene el túnel)"
+          echo ""
+          echo "PASO 3 - En Visual Studio 2022:"
+          echo "   • Herramientas > iOS > Emparejar con Mac"
+          echo "   • Clic en 'Agregar Mac...'"
+          echo "   • Dirección IP: localhost"
+          echo "   • Usuario: runner"
+          echo "   • Contraseña: (dejar vacío, usa clave SSH de tmate)"
+          echo ""
+          echo "⚠️  NOTA: Si pide contraseña, primero configura una:"
+          echo "   En la sesión SSH ejecuta: sudo dscl . -passwd /Users/runner TU_CONTRASEÑA"
+          echo ""
+          echo "=========================================="
+          echo "📱 COMANDOS ÚTILES PARA EL SIMULADOR"
           echo "----------------------------------------"
           echo ""
-          echo "Para compilar apps .NET MAUI desde tu Windows:"
+          echo "Ver simuladores:"
+          echo "  xcrun simctl list devices available"
           echo ""
-          echo "1. Conéctate por SSH (comando tmate arriba)"
+          echo "Iniciar simulador:"
+          echo "  xcrun simctl boot 'iPhone 16 Pro'"
+          echo "  open -a Simulator"
           echo ""
-          echo "2. En Visual Studio 2022:"
-          echo "   Tools > Options > Xamarin > iOS Settings"
-          echo "   Add Mac > localhost:22"
-          echo "   (después de hacer port forwarding SSH)"
+          echo "📸 Capturar screenshot:"
+          echo "  ~/screenshot.sh"
           echo ""
-          echo "3. Compila tu app desde Windows"
-          echo ""
-          echo "4. Conéctate por VNC para ver el simulador"
-          echo ""
-          echo "=========================================="
-          echo "💡 RESUMEN SIMPLE"
-          echo "=========================================="
-          echo ""
-          echo "1. Copia el comando SSH que aparece en los logs"
-          echo "   (busca 'SSH session' arriba)"
-          echo ""
-          echo "2. Ejecútalo en tu PowerShell"
-          echo ""
-          echo "3. Ya tienes acceso al macOS!"
-          echo ""
-          echo "4. Para VER el escritorio:"
-          echo "   - Sal del SSH"
-          echo "   - Reconecta con: ssh -L 5900:localhost:5900 [comando-tmate]"
-          echo "   - Abre VNC Viewer: localhost:5900"
-          echo "   - Contraseña: macos123"
+          echo "🔧 Compilar .NET MAUI:"
+          echo "  dotnet build -f net10.0-ios"
           echo ""
           echo "=========================================="
       
-      - name: Abrir Simulator
+      - name: Iniciar Simulator
         run: |
           echo "📱 Buscando simuladores disponibles..."
-          xcrun simctl list devices available | grep -E "iPhone|iPad" | head -10
+          xcrun simctl list devices available | grep -E "iPhone|iPad" | head -5
           
-          # Obtener el UUID del primer iPhone disponible
+          # Obtener el UUID del iPhone 16 Pro
           DEVICE_UUID=$(xcrun simctl list devices available | grep "iPhone 16 Pro (" | head -1 | grep -oE '[A-F0-9-]{36}')
           
           if [ -n "$DEVICE_UUID" ]; then
-            echo "📱 Iniciando dispositivo UUID: $DEVICE_UUID"
-            xcrun simctl boot "$DEVICE_UUID" || true
+            echo "📱 Iniciando iPhone 16 Pro: $DEVICE_UUID"
+            xcrun simctl boot "$DEVICE_UUID" 2>/dev/null || true
             open -a Simulator
-            sleep 5
-            echo "✅ Simulator listo"
+            sleep 10
+            
+            # Capturar screenshot inicial
+            xcrun simctl io booted screenshot ~/Screenshots/simulator_inicial.png 2>/dev/null || true
+            echo "✅ Simulator iniciado - Screenshot guardado en ~/Screenshots/"
           else
-            echo "⚠️ No se encontró iPhone 16 Pro, intentando iPhone 16..."
-            DEVICE_UUID=$(xcrun simctl list devices available | grep "iPhone 16 (" | head -1 | grep -oE '[A-F0-9-]{36}')
-            if [ -n "$DEVICE_UUID" ]; then
-              xcrun simctl boot "$DEVICE_UUID" || true
-            fi
+            echo "⚠️ No se encontró iPhone 16 Pro"
             open -a Simulator
           fi
       
-      - name: Crear guía en el escritorio
+      - name: Iniciar servidor HTTP para screenshots
         run: |
-          cat > ~/Desktop/INSTRUCCIONES.txt << 'GUIDE'
-          ╔════════════════════════════════════════════════╗
-          ║        🍎 macOS GitHub Actions Remote          ║
-          ╚════════════════════════════════════════════════╝
+          cd ~/Screenshots
+          python3 -m http.server 8080 &
+          sleep 2
+          echo "✅ Servidor HTTP iniciado en puerto 8080"
+          echo "📁 Los screenshots estarán en ~/Screenshots/"
+      
+      - name: Crear script de ayuda
+        run: |
+          cat > ~/screenshot.sh << 'SCRIPT'
+          #!/bin/bash
+          FILENAME="screen_$(date +%Y%m%d_%H%M%S).png"
+          xcrun simctl io booted screenshot ~/Screenshots/$FILENAME
+          echo "✅ Screenshot guardado: ~/Screenshots/$FILENAME"
+          echo "📁 Ver todos: ls ~/Screenshots/"
+          SCRIPT
+          chmod +x ~/screenshot.sh
           
-          ESTÁS CONECTADO AL SERVIDOR macOS REMOTO
+          cat > ~/grabar.sh << 'SCRIPT'
+          #!/bin/bash
+          FILENAME="video_$(date +%Y%m%d_%H%M%S).mov"
+          echo "🎬 Grabando... Presiona Ctrl+C para detener"
+          xcrun simctl io booted recordVideo ~/Screenshots/$FILENAME
+          SCRIPT
+          chmod +x ~/grabar.sh
           
-          📱 SIMULADORES iOS:
-          
-          Ver simuladores disponibles:
-            xcrun simctl list devices
-          
-          Abrir Simulator:
-            open -a Simulator
-          
-          Iniciar iPhone 15:
-            xcrun simctl boot "iPhone 15"
-          
-          🔧 HERRAMIENTAS:
-          
-          - Xcode: open -a Xcode
-          - .NET: dotnet --version
-          - Java: java -version
-          - CocoaPods: pod --version
-          
-          💻 COMPILAR APPS:
-          
-          .NET MAUI:
-            dotnet build -f net8.0-ios
-            dotnet build -t:Run -f net8.0-ios
-          
-          Kotlin Multiplatform:
-            ./gradlew linkDebugFrameworkIosSimulatorArm64
-          
-          🎯 CONSEJOS:
-          
-          - El Simulator ya debería estar abierto
-          - Usa Xcode para desarrollo nativo
-          - Compila desde tu Windows y ve resultados aquí
-          
-          GUIDE
-          
-          echo "✅ Guía creada en ~/Desktop/INSTRUCCIONES.txt"
+          echo "✅ Scripts creados:"
+          echo "   ~/screenshot.sh - Capturar pantalla"
+          echo "   ~/grabar.sh - Grabar video"
       
       - name: Mantener servidor activo
         run: |
@@ -258,16 +164,15 @@ jobs:
           echo "🚀 SERVIDOR ACTIVO"
           echo "=========================================="
           echo ""
-          echo "📝 PASOS RÁPIDOS:"
+          echo "📝 CONEXIÓN SSH:"
+          echo "   Busca arriba: ssh xxxxx@xxx.tmate.io"
           echo ""
-          echo "1. Busca arriba el comando 'ssh xxxxx@xxx.tmate.io'"
-          echo "2. Cópialo y ejecútalo en tu Windows"
-          echo "3. ¡Ya tienes acceso al macOS!"
+          echo "🔗 PARA VISUAL STUDIO (Pair to Mac):"
+          echo "   1. PowerShell: ssh -L 22:localhost:22 xxxxx@xxx.tmate.io"
+          echo "   2. VS2022: Emparejar con Mac > Agregar Mac > localhost"
+          echo "   3. Usuario: runner | Contraseña: runner123"
           echo ""
-          echo "Para VNC (ver escritorio):"
-          echo "- Usa: ssh -L 5900:localhost:5900 [el-comando-tmate]"
-          echo "- Luego VNC Viewer: localhost:5900"
-          echo "- 🔐 Contraseña VNC: macos123"
+          echo "📸 Para screenshots: ~/screenshot.sh"
           echo ""
           echo "💡 Cancela el workflow cuando termines"
           echo ""
@@ -281,15 +186,6 @@ jobs:
               open -a Simulator 2>/dev/null || true
             fi
             
-            # Verificar túneles Cloudflare
-            if ! pgrep -f "cloudflared.*5900" > /dev/null; then
-              cloudflared tunnel --url tcp://localhost:5900 > cloudflare_vnc.log 2>&1 &
-            fi
-            
-            if ! pgrep -f "cloudflared.*22" > /dev/null; then
-              cloudflared tunnel --url tcp://localhost:22 > cloudflare_ssh.log 2>&1 &
-            fi
-            
             echo "✓ $(date '+%H:%M:%S') - Servidor activo"
           done
       
@@ -297,6 +193,5 @@ jobs:
         if: always()
         run: |
           echo "🧹 Limpiando..."
-          pkill cloudflared || true
-          sudo systemsetup -setremotelogin off
+          pkill -f "python3 -m http.server" || true
           echo "✅ Limpieza completada"
