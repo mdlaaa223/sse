@@ -2,11 +2,6 @@ name: macOS 26 SSH - Visual Studio Pair to Mac
 
 on:
   workflow_dispatch:
-    inputs:
-      ngrok_token:
-        description: 'Token de ngrok (obtén uno gratis en ngrok.com)'
-        required: true
-        type: string
 
 jobs:
   macos-ssh-server:
@@ -38,98 +33,98 @@ jobs:
           sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
           echo "✅ Xcode configurado"
       
-      - name: Habilitar SSH y configurar usuario
+      - name: Habilitar SSH
         run: |
-          # Habilitar Remote Login (SSH)
           sudo systemsetup -setremotelogin on
-          
-          # Crear contraseña para el usuario runner
-          # Método que funciona en GitHub Actions
-          sudo security set-keychain-settings -t 3600 -u ~/Library/Keychains/login.keychain-db 2>/dev/null || true
-          
           echo "✅ SSH habilitado"
-          echo ""
-          echo "⚠️ IMPORTANTE: Configura la contraseña manualmente después de conectarte:"
-          echo "   sudo passwd runner"
       
-      - name: Instalar y configurar ngrok
+      - name: Instalar bore (túnel TCP gratuito)
         run: |
-          # Instalar ngrok
-          brew install ngrok
-          
-          # Configurar token de ngrok
-          ngrok config add-authtoken ${{ inputs.ngrok_token }}
-          
-          echo "✅ ngrok instalado y configurado"
+          # Instalar bore desde cargo
+          brew install rust
+          cargo install bore-cli
+          echo "✅ bore instalado"
       
-      - name: Iniciar túnel ngrok para SSH
+      - name: Iniciar túnel bore para SSH
         run: |
-          # Iniciar ngrok en segundo plano
-          ngrok tcp 22 --log=stdout > ngrok.log 2>&1 &
+          # Agregar cargo bin al PATH
+          export PATH="$HOME/.cargo/bin:$PATH"
+          
+          # Iniciar bore en segundo plano
+          bore local 22 --to bore.pub > bore.log 2>&1 &
           sleep 10
           
-          # Obtener la URL de ngrok
-          NGROK_URL=$(curl -s http://localhost:4040/api/tunnels | grep -oE 'tcp://[^"]+' | head -1)
+          # Obtener el puerto asignado
+          BORE_PORT=$(grep -oE 'remote port ([0-9]+)' bore.log | grep -oE '[0-9]+' | head -1)
           
-          if [ -z "$NGROK_URL" ]; then
-            echo "❌ Error: No se pudo obtener la URL de ngrok"
-            cat ngrok.log
-            exit 1
+          if [ -z "$BORE_PORT" ]; then
+            echo "⚠️ No se pudo obtener el puerto de bore, mostrando log:"
+            cat bore.log
+            echo ""
+            echo "Usando puerto por defecto..."
+            BORE_PORT="N/A"
           fi
           
-          # Extraer host y puerto
-          NGROK_HOST=$(echo $NGROK_URL | sed 's|tcp://||' | cut -d: -f1)
-          NGROK_PORT=$(echo $NGROK_URL | sed 's|tcp://||' | cut -d: -f2)
-          
           echo ""
           echo "=========================================="
-          echo "🎉 TÚNEL SSH LISTO PARA VISUAL STUDIO"
+          echo "🎉 TÚNEL SSH LISTO"
           echo "=========================================="
           echo ""
-          echo "📡 URL completa: $NGROK_URL"
-          echo "🖥️  Host: $NGROK_HOST"
-          echo "🔌 Puerto: $NGROK_PORT"
+          echo "📡 Host: bore.pub"
+          echo "🔌 Puerto: $BORE_PORT"
           echo ""
           echo "=========================================="
-          echo "📋 INSTRUCCIONES PARA VISUAL STUDIO 2022"
+          echo "📋 PARA VISUAL STUDIO 2022"
           echo "=========================================="
           echo ""
-          echo "1. Abre Visual Studio 2022"
-          echo "2. Ve a: Herramientas > iOS > Emparejar con Mac"
-          echo "3. Clic en 'Agregar Mac...'"
-          echo "4. Escribe: ${NGROK_HOST}:${NGROK_PORT}"
-          echo "5. Usuario: runner"
-          echo "6. Contraseña: (configúrala primero, ver abajo)"
-          echo ""
-          echo "=========================================="
-          echo "⚠️ ANTES DE EMPAREJAR - Configura contraseña"
-          echo "=========================================="
-          echo ""
-          echo "Conéctate por SSH primero:"
-          echo "  ssh -p $NGROK_PORT runner@$NGROK_HOST"
-          echo ""
-          echo "Luego ejecuta:"
-          echo "  sudo passwd runner"
-          echo "  (Enter para old password, luego escribe: runner123)"
+          echo "1. Primero configura contraseña (ver tmate abajo)"
+          echo "2. Luego en VS2022:"
+          echo "   Herramientas > iOS > Emparejar con Mac"
+          echo "   Host: bore.pub:$BORE_PORT"
+          echo "   Usuario: runner"
+          echo "   Contraseña: runner123"
           echo ""
           echo "=========================================="
           
-          # Guardar para uso posterior
-          echo "NGROK_HOST=$NGROK_HOST" >> $GITHUB_ENV
-          echo "NGROK_PORT=$NGROK_PORT" >> $GITHUB_ENV
+          echo "BORE_PORT=$BORE_PORT" >> $GITHUB_ENV
       
-      - name: Usar tmate como respaldo
+      - name: Usar tmate para configuración inicial
         uses: mxschmitt/action-tmate@v3
         timeout-minutes: 350
         with:
           detached: true
+      
+      - name: Mostrar instrucciones completas
+        run: |
+          echo ""
+          echo "=========================================="
+          echo "⚠️ PASO IMPORTANTE: CONFIGURAR CONTRASEÑA"
+          echo "=========================================="
+          echo ""
+          echo "1. Busca arriba el comando: ssh xxxxx@xxx.tmate.io"
+          echo "2. Conéctate desde PowerShell"
+          echo "3. Ejecuta:"
+          echo "   sudo passwd runner"
+          echo "   Old password: [Enter]"
+          echo "   New password: runner123"
+          echo "   Confirm: runner123"
+          echo ""
+          echo "=========================================="
+          echo "📋 LUEGO EMPAREJA VISUAL STUDIO"
+          echo "=========================================="
+          echo ""
+          echo "En VS2022 > Herramientas > iOS > Emparejar con Mac:"
+          echo "   Host: bore.pub:$BORE_PORT"
+          echo "   Usuario: runner"
+          echo "   Contraseña: runner123"
+          echo ""
+          echo "=========================================="
       
       - name: Iniciar Simulator
         run: |
           echo "📱 Buscando simuladores disponibles..."
           xcrun simctl list devices available | grep -E "iPhone|iPad" | head -5
           
-          # Obtener el UUID del iPhone 16 Pro
           DEVICE_UUID=$(xcrun simctl list devices available | grep "iPhone 16 Pro (" | head -1 | grep -oE '[A-F0-9-]{36}')
           
           if [ -n "$DEVICE_UUID" ]; then
@@ -139,7 +134,6 @@ jobs:
             sleep 5
             echo "✅ Simulator iniciado"
           else
-            echo "⚠️ No se encontró iPhone 16 Pro, abriendo Simulator"
             open -a Simulator
           fi
       
@@ -155,36 +149,25 @@ jobs:
           SCRIPT
           chmod +x ~/screenshot.sh
           
-          cat > ~/info.sh << 'SCRIPT'
-          #!/bin/bash
-          echo "=========================================="
-          echo "📋 INFORMACIÓN DE CONEXIÓN"
-          echo "=========================================="
-          curl -s http://localhost:4040/api/tunnels | grep -oE 'tcp://[^"]+' | head -1
-          echo ""
-          echo "Usuario: runner"
-          echo "Contraseña: (la que configuraste con 'sudo passwd runner')"
-          echo "=========================================="
-          SCRIPT
-          chmod +x ~/info.sh
-          
-          echo "✅ Scripts creados: ~/screenshot.sh, ~/info.sh"
+          echo "✅ Script ~/screenshot.sh creado"
       
       - name: Mantener servidor activo
         run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          
           echo ""
           echo "=========================================="
           echo "🚀 SERVIDOR ACTIVO"
           echo "=========================================="
           echo ""
-          echo "📡 SSH: ssh -p $NGROK_PORT runner@$NGROK_HOST"
+          echo "📡 Túnel bore: bore.pub:$BORE_PORT"
           echo ""
           echo "🔗 Para Visual Studio 2022:"
-          echo "   Host: ${NGROK_HOST}:${NGROK_PORT}"
+          echo "   Host: bore.pub:$BORE_PORT"
           echo "   Usuario: runner"
+          echo "   Contraseña: runner123 (configúrala primero)"
           echo ""
-          echo "📸 Para screenshots: ~/screenshot.sh"
-          echo "📋 Ver info: ~/info.sh"
+          echo "⚠️ PRIMERO configura contraseña con tmate (ver arriba)"
           echo ""
           echo "💡 Cancela el workflow cuando termines"
           echo ""
@@ -193,10 +176,10 @@ jobs:
           while true; do
             sleep 60
             
-            # Verificar que ngrok siga activo
-            if ! pgrep -f ngrok > /dev/null; then
-              echo "⚠️ ngrok se detuvo, reiniciando..."
-              ngrok tcp 22 --log=stdout > ngrok.log 2>&1 &
+            # Verificar que bore siga activo
+            if ! pgrep -f "bore local" > /dev/null; then
+              echo "⚠️ bore se detuvo, reiniciando..."
+              bore local 22 --to bore.pub > bore.log 2>&1 &
               sleep 5
             fi
             
@@ -211,6 +194,5 @@ jobs:
       - name: Cleanup
         if: always()
         run: |
-          echo "🧹 Limpiando..."
-          pkill ngrok || true
+          pkill bore || true
           echo "✅ Limpieza completada"
