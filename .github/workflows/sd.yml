@@ -1,4 +1,4 @@
-name: macOS con VNC - Simuladores iOS
+name: macOS VNC - Simuladores iOS (Gratis)
 
 on:
   workflow_dispatch:
@@ -16,8 +16,8 @@ jobs:
       
       - name: Instalar herramientas
         run: |
-          brew install ngrok jq
-          echo "✅ Herramientas instaladas"
+          brew install cloudflared
+          echo "✅ Cloudflare Tunnel instalado"
       
       - name: Instalar .NET MAUI
         run: |
@@ -32,250 +32,216 @@ jobs:
           sudo gem install cocoapods
           echo "✅ KMP dependencies listas"
       
-      - name: Configurar Xcode y Simuladores
+      - name: Configurar Xcode
         run: |
           sudo xcodebuild -license accept
           sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
-          
-          echo "📱 Simuladores iOS disponibles:"
-          xcrun simctl list devices available | grep iPhone | head -5
-          
           echo "✅ Xcode configurado"
       
-      - name: Configurar VNC (Screen Sharing)
+      - name: Configurar VNC
         run: |
-          # Habilitar VNC/Screen Sharing
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
             -activate -configure -access -on \
             -restart -agent -privs -all \
             -allowAccessFor -allUsers
           
-          # Configurar contraseña VNC
-          # macOS usa un sistema de permisos, así que configuramos de forma básica
-          sudo defaults write /Library/Preferences/com.apple.RemoteManagement.plist VNCLegacyConnectionsEnabled -bool true
-          
-          echo "✅ VNC habilitado en puerto 5900"
+          echo "✅ VNC habilitado"
       
       - name: Habilitar SSH
         run: |
           sudo systemsetup -setremotelogin on
           echo "✅ SSH habilitado"
       
-      - name: Configurar ngrok
-        env:
-          NGROK_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
+      - name: Iniciar túnel Cloudflare para VNC
         run: |
-          if [ -z "$NGROK_TOKEN" ]; then
-            echo "❌ NGROK_AUTH_TOKEN no configurado"
-            exit 1
-          fi
-          ngrok config add-authtoken $NGROK_TOKEN
-      
-      - name: Iniciar túnel VNC con ngrok
-        run: |
-          # Túnel para VNC (puerto 5900)
-          ngrok tcp 5900 --log=stdout > ngrok_vnc.log &
+          cloudflared tunnel --url tcp://localhost:5900 > cloudflare_vnc.log 2>&1 &
           sleep 10
           
-          VNC_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
-          VNC_HOST=$(echo $VNC_URL | sed 's/tcp:\/\///' | cut -d':' -f1)
-          VNC_PORT=$(echo $VNC_URL | sed 's/tcp:\/\///' | cut -d':' -f2)
-          
-          echo "VNC_HOST=$VNC_HOST" >> $GITHUB_ENV
-          echo "VNC_PORT=$VNC_PORT" >> $GITHUB_ENV
+          VNC_URL=$(grep -o 'https://.*\.trycloudflare.com' cloudflare_vnc.log | head -1)
           
           echo "=========================================="
           echo "🎉 CONEXIÓN VNC LISTA"
           echo "=========================================="
           echo ""
-          echo "📺 Host: $VNC_HOST"
-          echo "📺 Puerto: $VNC_PORT"
+          echo "📺 URL VNC: $VNC_URL"
           echo ""
+          echo "VNC_URL=$VNC_URL" >> $GITHUB_ENV
       
-      - name: Iniciar túnel SSH con ngrok
+      - name: Iniciar túnel Cloudflare para SSH
         run: |
-          # Túnel para SSH (puerto 22)
-          ngrok tcp 22 --log=stdout > ngrok_ssh.log &
+          cloudflared tunnel --url tcp://localhost:22 > cloudflare_ssh.log 2>&1 &
           sleep 10
           
-          SSH_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[1].public_url')
-          SSH_HOST=$(echo $SSH_URL | sed 's/tcp:\/\///' | cut -d':' -f1)
-          SSH_PORT=$(echo $SSH_URL | sed 's/tcp:\/\///' | cut -d':' -f2)
-          
-          echo "SSH_HOST=$SSH_HOST" >> $GITHUB_ENV
-          echo "SSH_PORT=$SSH_PORT" >> $GITHUB_ENV
+          SSH_URL=$(grep -o 'https://.*\.trycloudflare.com' cloudflare_ssh.log | head -1)
           
           echo "=========================================="
           echo "🔐 CONEXIÓN SSH LISTA"
           echo "=========================================="
           echo ""
-          echo "📡 Host: $SSH_HOST"
-          echo "📡 Puerto: $SSH_PORT"
+          echo "📡 URL SSH: $SSH_URL"
           echo "👤 Usuario: runner"
           echo ""
+          echo "SSH_URL=$SSH_URL" >> $GITHUB_ENV
+      
+      - name: Usar tmate para acceso fácil
+        uses: mxschmitt/action-tmate@v3
+        timeout-minutes: 1
+        continue-on-error: true
       
       - name: Mostrar instrucciones completas
         run: |
           echo ""
           echo "=========================================="
-          echo "📋 INSTRUCCIONES COMPLETAS"
+          echo "📋 CÓMO CONECTARTE DESDE WINDOWS"
           echo "=========================================="
           echo ""
-          echo "🪟 OPCIÓN 1 - VNC VIEWER (Recomendado para ver simuladores)"
+          echo "🎯 OPCIÓN 1 - SSH con Port Forwarding (RECOMENDADO)"
           echo "----------------------------------------"
           echo ""
-          echo "1. Descarga VNC Viewer en Windows:"
-          echo "   https://www.realvnc.com/en/connect/download/viewer/"
+          echo "Esta es la forma MÁS FÁCIL de ver los simuladores:"
           echo ""
-          echo "2. Abre VNC Viewer"
+          echo "1. Busca arriba en los logs el comando SSH de tmate"
+          echo "   Se ve algo así: ssh xxxxx@nyc1.tmate.io"
           echo ""
-          echo "3. Conecta usando:"
-          echo "   ${{ env.VNC_HOST }}:${{ env.VNC_PORT }}"
+          echo "2. En tu Windows PowerShell, ejecuta ese comando"
           echo ""
-          echo "4. Si pide contraseña, presiona Enter (sin contraseña)"
+          echo "3. Una vez conectado por SSH, ejecuta:"
+          echo "   open -a Simulator"
+          echo "   xcrun simctl boot 'iPhone 15'"
           echo ""
-          echo "5. ¡Verás el escritorio de macOS con Xcode y simuladores!"
+          echo "4. Para ver el simulador en tu Windows, sal del SSH"
+          echo "   y ejecuta (reemplaza con el comando real de tmate):"
+          echo "   ssh -L 5900:localhost:5900 xxxxx@nyc1.tmate.io"
+          echo ""
+          echo "5. Ahora abre VNC Viewer y conecta a: localhost:5900"
           echo ""
           echo "=========================================="
-          echo "🖥️ OPCIÓN 2 - USAR DESDE WINDOWS DIRECTAMENTE"
+          echo "🎯 OPCIÓN 2 - Usar Visual Studio desde Windows"
           echo "----------------------------------------"
           echo ""
-          echo "Visual Studio 2022:"
-          echo "  Tools > Options > Xamarin > iOS Settings"
-          echo "  Add Mac: ${{ env.SSH_HOST }}:${{ env.SSH_PORT }}"
-          echo "  Username: runner"
+          echo "Para compilar apps .NET MAUI desde tu Windows:"
           echo ""
-          echo "Android Studio (KMP):"
-          echo "  Settings > Kotlin Multiplatform > iOS Build Server"
-          echo "  Host: ${{ env.SSH_HOST }}"
-          echo "  Port: ${{ env.SSH_PORT }}"
-          echo "  Username: runner"
+          echo "1. Conéctate por SSH (comando tmate arriba)"
           echo ""
-          echo "=========================================="
-          echo "🔧 OPCIÓN 3 - SSH para comandos"
-          echo "----------------------------------------"
+          echo "2. En Visual Studio 2022:"
+          echo "   Tools > Options > Xamarin > iOS Settings"
+          echo "   Add Mac > localhost:22"
+          echo "   (después de hacer port forwarding SSH)"
           echo ""
-          echo "ssh runner@${{ env.SSH_HOST }} -p ${{ env.SSH_PORT }}"
+          echo "3. Compila tu app desde Windows"
           echo ""
-          echo "Comandos útiles una vez conectado:"
-          echo "  - Listar simuladores:"
-          echo "    xcrun simctl list devices"
-          echo ""
-          echo "  - Abrir simulador iPhone 15:"
-          echo "    open -a Simulator"
-          echo "    xcrun simctl boot 'iPhone 15'"
-          echo ""
-          echo "  - Abrir Xcode:"
-          echo "    open -a Xcode"
+          echo "4. Conéctate por VNC para ver el simulador"
           echo ""
           echo "=========================================="
-          echo "💡 MEJOR FORMA DE USAR"
+          echo "💡 RESUMEN SIMPLE"
           echo "=========================================="
           echo ""
-          echo "1. Conéctate por VNC para VER los simuladores"
-          echo "2. Usa Visual Studio/Android Studio en Windows"
-          echo "3. Cuando compiles, verás la app en el simulador"
-          echo "   a través de VNC"
+          echo "1. Copia el comando SSH que aparece en los logs"
+          echo "   (busca 'SSH session' arriba)"
           echo ""
-          echo "O simplemente usa VNC y trabaja directamente"
-          echo "en el macOS remoto con Xcode!"
+          echo "2. Ejecútalo en tu PowerShell"
+          echo ""
+          echo "3. Ya tienes acceso al macOS!"
+          echo ""
+          echo "4. Para VER el escritorio:"
+          echo "   - Sal del SSH"
+          echo "   - Reconecta con: ssh -L 5900:localhost:5900 [comando-tmate]"
+          echo "   - Abre VNC Viewer: localhost:5900"
           echo ""
           echo "=========================================="
       
-      - name: Abrir Simulator automáticamente
+      - name: Abrir Simulator
         run: |
           echo "📱 Abriendo Simulator..."
-          
-          # Abrir la app Simulator
           open -a Simulator
-          
-          # Esperar a que cargue
           sleep 5
-          
-          # Iniciar un iPhone 15 por defecto
           xcrun simctl boot "iPhone 15 Pro" || xcrun simctl boot "iPhone 15" || true
-          
-          echo "✅ Simulator iniciado"
+          echo "✅ Simulator listo"
       
-      - name: Crear script de ayuda
+      - name: Crear guía en el escritorio
         run: |
-          cat > ~/desktop-info.txt << 'INFO'
+          cat > ~/Desktop/INSTRUCCIONES.txt << 'GUIDE'
           ╔════════════════════════════════════════════════╗
-          ║   🍎 macOS GitHub Actions - Remote Desktop    ║
+          ║        🍎 macOS GitHub Actions Remote          ║
           ╚════════════════════════════════════════════════╝
           
-          Estás conectado al servidor macOS remoto.
+          ESTÁS CONECTADO AL SERVIDOR macOS REMOTO
           
           📱 SIMULADORES iOS:
-          - El Simulator ya está abierto
-          - Usa: xcrun simctl list devices
-          - Para abrir otro: open -a Simulator
-          
-          🔧 HERRAMIENTAS INSTALADAS:
-          - Xcode
-          - .NET SDK con MAUI
-          - Java 17
-          - CocoaPods
-          - Homebrew
-          
-          💻 COMANDOS ÚTILES:
           
           Ver simuladores disponibles:
             xcrun simctl list devices
           
-          Iniciar un simulador:
+          Abrir Simulator:
+            open -a Simulator
+          
+          Iniciar iPhone 15:
             xcrun simctl boot "iPhone 15"
           
-          Instalar app en simulador:
-            xcrun simctl install booted MiApp.app
+          🔧 HERRAMIENTAS:
           
-          Abrir URL en simulador:
-            xcrun simctl openurl booted "https://ejemplo.com"
+          - Xcode: open -a Xcode
+          - .NET: dotnet --version
+          - Java: java -version
+          - CocoaPods: pod --version
           
-          Compilar proyecto .NET MAUI:
+          💻 COMPILAR APPS:
+          
+          .NET MAUI:
             dotnet build -f net8.0-ios
+            dotnet build -t:Run -f net8.0-ios
           
-          Abrir Xcode:
-            open -a Xcode
+          Kotlin Multiplatform:
+            ./gradlew linkDebugFrameworkIosSimulatorArm64
           
-          🎯 DESARROLLO:
-          - Puedes usar Xcode directamente aquí
-          - O compilar desde tu VS/Android Studio en Windows
+          🎯 CONSEJOS:
           
-          INFO
+          - El Simulator ya debería estar abierto
+          - Usa Xcode para desarrollo nativo
+          - Compila desde tu Windows y ve resultados aquí
           
-          cat ~/desktop-info.txt
+          GUIDE
+          
+          echo "✅ Guía creada en ~/Desktop/INSTRUCCIONES.txt"
       
       - name: Mantener servidor activo
         run: |
           echo ""
-          echo "🚀 Servidor macOS activo"
-          echo "📺 Conecta VNC Viewer para ver el escritorio"
+          echo "=========================================="
+          echo "🚀 SERVIDOR ACTIVO"
+          echo "=========================================="
+          echo ""
+          echo "📝 PASOS RÁPIDOS:"
+          echo ""
+          echo "1. Busca arriba el comando 'ssh xxxxx@xxx.tmate.io'"
+          echo "2. Cópialo y ejecútalo en tu Windows"
+          echo "3. ¡Ya tienes acceso al macOS!"
+          echo ""
+          echo "Para VNC (ver escritorio):"
+          echo "- Usa: ssh -L 5900:localhost:5900 [el-comando-tmate]"
+          echo "- Luego VNC Viewer: localhost:5900"
+          echo ""
           echo "💡 Cancela el workflow cuando termines"
           echo ""
+          echo "=========================================="
           
           while true; do
             sleep 60
-            
-            # Verificar túneles
-            if ! pgrep -f "ngrok tcp 5900" > /dev/null; then
-              echo "⚠️  Reiniciando túnel VNC..."
-              ngrok tcp 5900 --log=stdout > ngrok_vnc.log &
-              sleep 5
-            fi
-            
-            if ! pgrep -f "ngrok tcp 22" > /dev/null; then
-              echo "⚠️  Reiniciando túnel SSH..."
-              ngrok tcp 22 --log=stdout > ngrok_ssh.log &
-              sleep 5
-            fi
             
             # Mantener Simulator activo
             if ! pgrep -f Simulator > /dev/null; then
               open -a Simulator 2>/dev/null || true
             fi
             
-            # Log periódico
+            # Verificar túneles Cloudflare
+            if ! pgrep -f "cloudflared.*5900" > /dev/null; then
+              cloudflared tunnel --url tcp://localhost:5900 > cloudflare_vnc.log 2>&1 &
+            fi
+            
+            if ! pgrep -f "cloudflared.*22" > /dev/null; then
+              cloudflared tunnel --url tcp://localhost:22 > cloudflare_ssh.log 2>&1 &
+            fi
+            
             echo "✓ $(date '+%H:%M:%S') - Servidor activo"
           done
       
@@ -283,6 +249,6 @@ jobs:
         if: always()
         run: |
           echo "🧹 Limpiando..."
-          pkill ngrok || true
+          pkill cloudflared || true
           sudo systemsetup -setremotelogin off
-          echo "✅ Servidor detenido"
+          echo "✅ Limpieza completada"
