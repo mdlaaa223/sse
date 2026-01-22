@@ -50,6 +50,9 @@ jobs:
             -clientopts -setvnclegacy -vnclegacy yes \
             -clientopts -setvncpw -vncpw "$VNC_PASSWORD"
           
+          # Iniciar el servicio de Screen Sharing
+          sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null || true
+          
           echo "=========================================="
           echo "🔐 VNC CONFIGURADO"
           echo "=========================================="
@@ -165,11 +168,22 @@ jobs:
       
       - name: Abrir Simulator
         run: |
-          echo "📱 Abriendo Simulator..."
-          open -a Simulator
-          sleep 5
-          xcrun simctl boot "iPhone 15 Pro" || xcrun simctl boot "iPhone 15" || true
-          echo "✅ Simulator listo"
+          echo "📱 Buscando simuladores disponibles..."
+          xcrun simctl list devices available | grep -E "iPhone|iPad" | head -10
+          
+          # Obtener el primer iPhone disponible
+          DEVICE=$(xcrun simctl list devices available | grep "iPhone" | head -1 | sed 's/.*(\([^)]*\)).*/\1/' | head -1)
+          
+          if [ -n "$DEVICE" ]; then
+            echo "📱 Iniciando dispositivo: $DEVICE"
+            xcrun simctl boot "$DEVICE" || true
+            open -a Simulator
+            sleep 5
+            echo "✅ Simulator listo con $DEVICE"
+          else
+            echo "⚠️ No se encontró iPhone, abriendo Simulator vacío"
+            open -a Simulator
+          fi
       
       - name: Crear guía en el escritorio
         run: |
