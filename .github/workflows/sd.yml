@@ -1,189 +1,283 @@
-name: macOS Build Server - KMP & .NET MAUI
+name: macOS con VNC - Simuladores iOS
 
 on:
   workflow_dispatch:
 
 jobs:
-  macos-build-server:
+  macos-vnc-server:
     runs-on: macos-latest
     
     steps:
       - name: Información del Sistema
         run: |
-          echo "🖥️  Sistema: macOS $(sw_vers -productVersion)"
-          echo "🔧 Arquitectura: $(uname -m)"
-          echo "⏰ Inicio: $(date)"
+          echo "🖥️  macOS $(sw_vers -productVersion)"
+          echo "🔧 $(uname -m)"
+          xcodebuild -version
       
-      - name: Configurar SSH
+      - name: Instalar herramientas
         run: |
-          sudo systemsetup -setremotelogin on
-          
-          # En GitHub Actions runners, usamos el usuario actual sin cambiar password
-          # El acceso se hará via SSH keys o tmate
-          
-          echo "✅ SSH habilitado - Usuario: runner"
-          echo "📝 Nota: Usa tmate para acceso seguro (aparecerá más adelante)"
-      
-      - name: Instalar herramientas esenciales
-        run: |
-          echo "📦 Instalando Homebrew packages..."
-          brew install ngrok wget curl jq
+          brew install ngrok jq
           echo "✅ Herramientas instaladas"
       
-      - name: Instalar .NET SDK (para .NET MAUI)
+      - name: Instalar .NET MAUI
         run: |
-          echo "📦 Instalando .NET SDK..."
           brew install --cask dotnet-sdk
-          
-          dotnet --version
-          
-          sudo dotnet workload install maui --skip-manifest-update
-          sudo dotnet workload install ios --skip-manifest-update
-          sudo dotnet workload install maccatalyst --skip-manifest-update
-          
-          echo "✅ .NET SDK y MAUI instalados"
+          sudo dotnet workload install maui ios maccatalyst --skip-manifest-update
+          echo "✅ .NET MAUI listo"
       
-      - name: Configurar Xcode y herramientas iOS
+      - name: Instalar Java y CocoaPods para KMP
         run: |
-          echo "🔧 Configurando Xcode..."
-          
+          brew install openjdk@17
+          sudo ln -sfn /opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk /Library/Java/JavaVirtualMachines/openjdk-17.jdk
+          sudo gem install cocoapods
+          echo "✅ KMP dependencies listas"
+      
+      - name: Configurar Xcode y Simuladores
+        run: |
           sudo xcodebuild -license accept
-          
           sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
           
-          xcodebuild -version
-          xcrun simctl list devices
+          echo "📱 Simuladores iOS disponibles:"
+          xcrun simctl list devices available | grep iPhone | head -5
           
           echo "✅ Xcode configurado"
       
-      - name: Instalar dependencias para KMP
+      - name: Configurar VNC (Screen Sharing)
         run: |
-          echo "📦 Instalando herramientas para Kotlin Multiplatform..."
+          # Habilitar VNC/Screen Sharing
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+            -activate -configure -access -on \
+            -restart -agent -privs -all \
+            -allowAccessFor -allUsers
           
-          brew install openjdk@17
-          sudo ln -sfn /opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk /Library/Java/JavaVirtualMachines/openjdk-17.jdk
+          # Configurar contraseña VNC
+          # macOS usa un sistema de permisos, así que configuramos de forma básica
+          sudo defaults write /Library/Preferences/com.apple.RemoteManagement.plist VNCLegacyConnectionsEnabled -bool true
           
-          sudo gem install cocoapods
-          
-          java -version
-          pod --version
-          
-          echo "✅ Herramientas KMP instaladas"
+          echo "✅ VNC habilitado en puerto 5900"
+      
+      - name: Habilitar SSH
+        run: |
+          sudo systemsetup -setremotelogin on
+          echo "✅ SSH habilitado"
       
       - name: Configurar ngrok
         env:
           NGROK_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
         run: |
           if [ -z "$NGROK_TOKEN" ]; then
-            echo "❌ ERROR: NGROK_AUTH_TOKEN no configurado"
+            echo "❌ NGROK_AUTH_TOKEN no configurado"
             exit 1
           fi
-          
           ngrok config add-authtoken $NGROK_TOKEN
-          echo "✅ ngrok configurado"
       
-      - name: Iniciar túnel SSH
+      - name: Iniciar túnel VNC con ngrok
         run: |
-          ngrok tcp 22 --log=stdout > ngrok.log &
+          # Túnel para VNC (puerto 5900)
+          ngrok tcp 5900 --log=stdout > ngrok_vnc.log &
           sleep 10
           
-          NGROK_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
-          NGROK_HOST=$(echo $NGROK_URL | sed 's/tcp:\/\///' | cut -d':' -f1)
-          NGROK_PORT=$(echo $NGROK_URL | sed 's/tcp:\/\///' | cut -d':' -f2)
+          VNC_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
+          VNC_HOST=$(echo $VNC_URL | sed 's/tcp:\/\///' | cut -d':' -f1)
+          VNC_PORT=$(echo $VNC_URL | sed 's/tcp:\/\///' | cut -d':' -f2)
+          
+          echo "VNC_HOST=$VNC_HOST" >> $GITHUB_ENV
+          echo "VNC_PORT=$VNC_PORT" >> $GITHUB_ENV
           
           echo "=========================================="
-          echo "🎉 SERVIDOR DE BUILD macOS LISTO"
+          echo "🎉 CONEXIÓN VNC LISTA"
           echo "=========================================="
           echo ""
-          echo "📡 CONEXIÓN SSH:"
-          echo "   Host: $NGROK_HOST"
-          echo "   Puerto: $NGROK_PORT"
-          echo "   Usuario: runner"
-          echo "   Password: MacOSBuild2024!"
+          echo "📺 Host: $VNC_HOST"
+          echo "📺 Puerto: $VNC_PORT"
           echo ""
-          echo "💻 Comando SSH:"
-          echo "   ssh runner@$NGROK_HOST -p $NGROK_PORT"
-          echo ""
-          echo "=========================================="
-          echo "🔧 CONFIGURACIÓN PARA TUS IDEs:"
-          echo "=========================================="
-          echo ""
-          echo "📱 ANDROID STUDIO (KMP):"
-          echo "   1. Settings > Build > Kotlin Multiplatform"
-          echo "   2. iOS Build Server: $NGROK_HOST"
-          echo "   3. Port: $NGROK_PORT"
-          echo "   4. Username: runner"
-          echo "   5. Password: MacOSBuild2024!"
-          echo ""
-          echo "🪟 VISUAL STUDIO 2022 (.NET MAUI):"
-          echo "   1. Tools > Options > Xamarin > iOS Settings"
-          echo "   2. Remote macOS Build Host"
-          echo "   3. Add: $NGROK_HOST:$NGROK_PORT"
-          echo "   4. Username: runner"
-          echo "   5. Password: MacOSBuild2024!"
-          echo ""
-          echo "=========================================="
-          echo "📋 INFORMACIÓN DEL SISTEMA:"
-          echo "=========================================="
-          echo "   Xcode: $(xcodebuild -version | head -1)"
-          echo "   .NET: $(dotnet --version)"
-          echo "   Java: $(java -version 2>&1 | head -1)"
-          echo "   Ruby: $(ruby -v | cut -d' ' -f2)"
-          echo "   CocoaPods: $(pod --version)"
-          echo "=========================================="
-          
-          echo "NGROK_HOST=$NGROK_HOST" >> $GITHUB_ENV
-          echo "NGROK_PORT=$NGROK_PORT" >> $GITHUB_ENV
       
-      - name: Configurar servidor de build .NET MAUI
+      - name: Iniciar túnel SSH con ngrok
         run: |
-          echo "🔧 Configurando servicios para .NET MAUI..."
+          # Túnel para SSH (puerto 22)
+          ngrok tcp 22 --log=stdout > ngrok_ssh.log &
+          sleep 10
           
-          mkdir -p ~/builds
+          SSH_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[1].public_url')
+          SSH_HOST=$(echo $SSH_URL | sed 's/tcp:\/\///' | cut -d':' -f1)
+          SSH_PORT=$(echo $SSH_URL | sed 's/tcp:\/\///' | cut -d':' -f2)
           
-          chmod 755 ~/builds
+          echo "SSH_HOST=$SSH_HOST" >> $GITHUB_ENV
+          echo "SSH_PORT=$SSH_PORT" >> $GITHUB_ENV
           
-          echo "✅ Servidor .NET MAUI listo"
+          echo "=========================================="
+          echo "🔐 CONEXIÓN SSH LISTA"
+          echo "=========================================="
+          echo ""
+          echo "📡 Host: $SSH_HOST"
+          echo "📡 Puerto: $SSH_PORT"
+          echo "👤 Usuario: runner"
+          echo ""
       
-      - name: Crear scripts de utilidad
+      - name: Mostrar instrucciones completas
         run: |
-          cat > ~/check-system.sh << 'SCRIPT1'
-          #!/bin/bash
-          echo "====== ESTADO DEL SISTEMA ======"
-          echo "CPU: $(sysctl -n machdep.cpu.brand_string)"
-          echo "RAM: $(sysctl -n hw.memsize | awk '{print $1/1024/1024/1024 " GB"}')"
-          echo "Disco disponible: $(df -h / | awk 'NR==2 {print $4}')"
           echo ""
-          echo "====== HERRAMIENTAS ======"
-          echo "Xcode: $(xcodebuild -version | head -1)"
-          echo ".NET: $(dotnet --version)"
-          echo "Java: $(java -version 2>&1 | head -1)"
-          echo "CocoaPods: $(pod --version)"
+          echo "=========================================="
+          echo "📋 INSTRUCCIONES COMPLETAS"
+          echo "=========================================="
           echo ""
-          echo "====== SIMULADORES iOS ======"
-          xcrun simctl list devices | grep iPhone
+          echo "🪟 OPCIÓN 1 - VNC VIEWER (Recomendado para ver simuladores)"
+          echo "----------------------------------------"
           echo ""
-          echo "====== PROCESOS DE BUILD ======"
-          ps aux | grep -E 'xcodebuild|dotnet|gradle' | grep -v grep
-          SCRIPT1
-          chmod +x ~/check-system.sh
-          
-          cat > ~/clean-builds.sh << 'SCRIPT2'
-          #!/bin/bash
-          echo "🧹 Limpiando builds antiguos..."
-          rm -rf ~/Library/Developer/Xcode/DerivedData/*
-          rm -rf ~/builds/*
-          dotnet clean || true
-          echo "✅ Limpieza completada"
-          SCRIPT2
-          chmod +x ~/clean-builds.sh
-          
-          echo "✅ Scripts de utilidad creados"
+          echo "1. Descarga VNC Viewer en Windows:"
+          echo "   https://www.realvnc.com/en/connect/download/viewer/"
+          echo ""
+          echo "2. Abre VNC Viewer"
+          echo ""
+          echo "3. Conecta usando:"
+          echo "   ${{ env.VNC_HOST }}:${{ env.VNC_PORT }}"
+          echo ""
+          echo "4. Si pide contraseña, presiona Enter (sin contraseña)"
+          echo ""
+          echo "5. ¡Verás el escritorio de macOS con Xcode y simuladores!"
+          echo ""
+          echo "=========================================="
+          echo "🖥️ OPCIÓN 2 - USAR DESDE WINDOWS DIRECTAMENTE"
+          echo "----------------------------------------"
+          echo ""
+          echo "Visual Studio 2022:"
+          echo "  Tools > Options > Xamarin > iOS Settings"
+          echo "  Add Mac: ${{ env.SSH_HOST }}:${{ env.SSH_PORT }}"
+          echo "  Username: runner"
+          echo ""
+          echo "Android Studio (KMP):"
+          echo "  Settings > Kotlin Multiplatform > iOS Build Server"
+          echo "  Host: ${{ env.SSH_HOST }}"
+          echo "  Port: ${{ env.SSH_PORT }}"
+          echo "  Username: runner"
+          echo ""
+          echo "=========================================="
+          echo "🔧 OPCIÓN 3 - SSH para comandos"
+          echo "----------------------------------------"
+          echo ""
+          echo "ssh runner@${{ env.SSH_HOST }} -p ${{ env.SSH_PORT }}"
+          echo ""
+          echo "Comandos útiles una vez conectado:"
+          echo "  - Listar simuladores:"
+          echo "    xcrun simctl list devices"
+          echo ""
+          echo "  - Abrir simulador iPhone 15:"
+          echo "    open -a Simulator"
+          echo "    xcrun simctl boot 'iPhone 15'"
+          echo ""
+          echo "  - Abrir Xcode:"
+          echo "    open -a Xcode"
+          echo ""
+          echo "=========================================="
+          echo "💡 MEJOR FORMA DE USAR"
+          echo "=========================================="
+          echo ""
+          echo "1. Conéctate por VNC para VER los simuladores"
+          echo "2. Usa Visual Studio/Android Studio en Windows"
+          echo "3. Cuando compiles, verás la app en el simulador"
+          echo "   a través de VNC"
+          echo ""
+          echo "O simplemente usa VNC y trabaja directamente"
+          echo "en el macOS remoto con Xcode!"
+          echo ""
+          echo "=========================================="
       
-      - name: Acceso remoto con tmate
-        uses: mxschmitt/action-tmate@v3
-        with:
-          limit-access-to-actor: true
+      - name: Abrir Simulator automáticamente
+        run: |
+          echo "📱 Abriendo Simulator..."
+          
+          # Abrir la app Simulator
+          open -a Simulator
+          
+          # Esperar a que cargue
+          sleep 5
+          
+          # Iniciar un iPhone 15 por defecto
+          xcrun simctl boot "iPhone 15 Pro" || xcrun simctl boot "iPhone 15" || true
+          
+          echo "✅ Simulator iniciado"
+      
+      - name: Crear script de ayuda
+        run: |
+          cat > ~/desktop-info.txt << 'INFO'
+          ╔════════════════════════════════════════════════╗
+          ║   🍎 macOS GitHub Actions - Remote Desktop    ║
+          ╚════════════════════════════════════════════════╝
+          
+          Estás conectado al servidor macOS remoto.
+          
+          📱 SIMULADORES iOS:
+          - El Simulator ya está abierto
+          - Usa: xcrun simctl list devices
+          - Para abrir otro: open -a Simulator
+          
+          🔧 HERRAMIENTAS INSTALADAS:
+          - Xcode
+          - .NET SDK con MAUI
+          - Java 17
+          - CocoaPods
+          - Homebrew
+          
+          💻 COMANDOS ÚTILES:
+          
+          Ver simuladores disponibles:
+            xcrun simctl list devices
+          
+          Iniciar un simulador:
+            xcrun simctl boot "iPhone 15"
+          
+          Instalar app en simulador:
+            xcrun simctl install booted MiApp.app
+          
+          Abrir URL en simulador:
+            xcrun simctl openurl booted "https://ejemplo.com"
+          
+          Compilar proyecto .NET MAUI:
+            dotnet build -f net8.0-ios
+          
+          Abrir Xcode:
+            open -a Xcode
+          
+          🎯 DESARROLLO:
+          - Puedes usar Xcode directamente aquí
+          - O compilar desde tu VS/Android Studio en Windows
+          
+          INFO
+          
+          cat ~/desktop-info.txt
+      
+      - name: Mantener servidor activo
+        run: |
+          echo ""
+          echo "🚀 Servidor macOS activo"
+          echo "📺 Conecta VNC Viewer para ver el escritorio"
+          echo "💡 Cancela el workflow cuando termines"
+          echo ""
+          
+          while true; do
+            sleep 60
+            
+            # Verificar túneles
+            if ! pgrep -f "ngrok tcp 5900" > /dev/null; then
+              echo "⚠️  Reiniciando túnel VNC..."
+              ngrok tcp 5900 --log=stdout > ngrok_vnc.log &
+              sleep 5
+            fi
+            
+            if ! pgrep -f "ngrok tcp 22" > /dev/null; then
+              echo "⚠️  Reiniciando túnel SSH..."
+              ngrok tcp 22 --log=stdout > ngrok_ssh.log &
+              sleep 5
+            fi
+            
+            # Mantener Simulator activo
+            if ! pgrep -f Simulator > /dev/null; then
+              open -a Simulator 2>/dev/null || true
+            fi
+            
+            # Log periódico
+            echo "✓ $(date '+%H:%M:%S') - Servidor activo"
+          done
       
       - name: Cleanup
         if: always()
@@ -191,4 +285,4 @@ jobs:
           echo "🧹 Limpiando..."
           pkill ngrok || true
           sudo systemsetup -setremotelogin off
-          echo "✅ Limpieza completada"
+          echo "✅ Servidor detenido"
