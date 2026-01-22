@@ -38,14 +38,25 @@ jobs:
           sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
           echo "✅ Xcode configurado"
       
-      - name: Configurar VNC
+      - name: Configurar VNC con contraseña
         run: |
+          # Crear contraseña para VNC (sin esto no puedes conectarte)
+          VNC_PASSWORD="macos123"
+          echo "runner:$VNC_PASSWORD" | sudo chpasswd
+          
+          # Habilitar ARD/VNC con configuración completa
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
             -activate -configure -access -on \
             -restart -agent -privs -all \
-            -allowAccessFor -allUsers
+            -allowAccessFor -allUsers \
+            -clientopts -setvnclegacy -vnclegacy yes \
+            -clientopts -setvncpw -vncpw "$VNC_PASSWORD"
           
-          echo "✅ VNC habilitado"
+          echo "=========================================="
+          echo "🔐 VNC CONFIGURADO"
+          echo "=========================================="
+          echo "Contraseña VNC: $VNC_PASSWORD"
+          echo "=========================================="
       
       - name: Habilitar SSH
         run: |
@@ -83,10 +94,11 @@ jobs:
           echo ""
           echo "SSH_URL=$SSH_URL" >> $GITHUB_ENV
       
-      - name: Usar tmate para acceso fácil
+      - name: Usar tmate para acceso SSH
         uses: mxschmitt/action-tmate@v3
-        timeout-minutes: 1
-        continue-on-error: true
+        timeout-minutes: 350
+        with:
+          detached: true
       
       - name: Mostrar instrucciones completas
         run: |
@@ -94,6 +106,8 @@ jobs:
           echo "=========================================="
           echo "📋 CÓMO CONECTARTE DESDE WINDOWS"
           echo "=========================================="
+          echo ""
+          echo "🔐 CONTRASEÑA VNC: macos123"
           echo ""
           echo "🎯 OPCIÓN 1 - SSH con Port Forwarding (RECOMENDADO)"
           echo "----------------------------------------"
@@ -147,6 +161,7 @@ jobs:
           echo "   - Sal del SSH"
           echo "   - Reconecta con: ssh -L 5900:localhost:5900 [comando-tmate]"
           echo "   - Abre VNC Viewer: localhost:5900"
+          echo "   - Contraseña: macos123"
           echo ""
           echo "=========================================="
       
@@ -220,6 +235,7 @@ jobs:
           echo "Para VNC (ver escritorio):"
           echo "- Usa: ssh -L 5900:localhost:5900 [el-comando-tmate]"
           echo "- Luego VNC Viewer: localhost:5900"
+          echo "- 🔐 Contraseña VNC: macos123"
           echo ""
           echo "💡 Cancela el workflow cuando termines"
           echo ""
