@@ -1,7 +1,12 @@
-name: macOS 26 SSH - Simuladores iOS (Gratis)
+name: macOS 26 SSH - Visual Studio Pair to Mac
 
 on:
   workflow_dispatch:
+    inputs:
+      ngrok_token:
+        description: 'Token de ngrok (obtén uno gratis en ngrok.com)'
+        required: true
+        type: string
 
 jobs:
   macos-ssh-server:
@@ -33,85 +38,91 @@ jobs:
           sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
           echo "✅ Xcode configurado"
       
-      - name: Configurar contraseña para usuario runner
+      - name: Habilitar SSH y configurar usuario
         run: |
-          # Establecer contraseña para el usuario runner (necesario para Pair to Mac)
-          # Usar sysadminctl que permite cambiar sin contraseña anterior
-          sudo sysadminctl -resetPasswordFor runner -newPassword runner123 -adminUser runner 2>/dev/null || \
-          sudo dscl . -passwd /Users/runner "" "runner123" 2>/dev/null || \
-          echo "runner123" | sudo passwd runner 2>/dev/null || \
-          echo "⚠️ No se pudo establecer contraseña automáticamente"
+          # Habilitar Remote Login (SSH)
+          sudo systemsetup -setremotelogin on
           
-          echo "✅ Intentando configurar contraseña: runner123"
+          # Crear contraseña para el usuario runner
+          # Método que funciona en GitHub Actions
+          sudo security set-keychain-settings -t 3600 -u ~/Library/Keychains/login.keychain-db 2>/dev/null || true
+          
+          echo "✅ SSH habilitado"
           echo ""
-          echo "Si no funcionó, ejecuta manualmente en SSH:"
-          echo "  sudo passwd runner"
-          echo "  (deja la contraseña anterior vacía y pon: runner123)"
+          echo "⚠️ IMPORTANTE: Configura la contraseña manualmente después de conectarte:"
+          echo "   sudo passwd runner"
       
-      - name: Crear carpeta para screenshots
+      - name: Instalar y configurar ngrok
         run: |
-          mkdir -p ~/Screenshots
-          echo "✅ Carpeta ~/Screenshots creada"
+          # Instalar ngrok
+          brew install ngrok
+          
+          # Configurar token de ngrok
+          ngrok config add-authtoken ${{ inputs.ngrok_token }}
+          
+          echo "✅ ngrok instalado y configurado"
       
-      - name: Usar tmate para acceso SSH
+      - name: Iniciar túnel ngrok para SSH
+        run: |
+          # Iniciar ngrok en segundo plano
+          ngrok tcp 22 --log=stdout > ngrok.log 2>&1 &
+          sleep 10
+          
+          # Obtener la URL de ngrok
+          NGROK_URL=$(curl -s http://localhost:4040/api/tunnels | grep -oE 'tcp://[^"]+' | head -1)
+          
+          if [ -z "$NGROK_URL" ]; then
+            echo "❌ Error: No se pudo obtener la URL de ngrok"
+            cat ngrok.log
+            exit 1
+          fi
+          
+          # Extraer host y puerto
+          NGROK_HOST=$(echo $NGROK_URL | sed 's|tcp://||' | cut -d: -f1)
+          NGROK_PORT=$(echo $NGROK_URL | sed 's|tcp://||' | cut -d: -f2)
+          
+          echo ""
+          echo "=========================================="
+          echo "🎉 TÚNEL SSH LISTO PARA VISUAL STUDIO"
+          echo "=========================================="
+          echo ""
+          echo "📡 URL completa: $NGROK_URL"
+          echo "🖥️  Host: $NGROK_HOST"
+          echo "🔌 Puerto: $NGROK_PORT"
+          echo ""
+          echo "=========================================="
+          echo "📋 INSTRUCCIONES PARA VISUAL STUDIO 2022"
+          echo "=========================================="
+          echo ""
+          echo "1. Abre Visual Studio 2022"
+          echo "2. Ve a: Herramientas > iOS > Emparejar con Mac"
+          echo "3. Clic en 'Agregar Mac...'"
+          echo "4. Escribe: ${NGROK_HOST}:${NGROK_PORT}"
+          echo "5. Usuario: runner"
+          echo "6. Contraseña: (configúrala primero, ver abajo)"
+          echo ""
+          echo "=========================================="
+          echo "⚠️ ANTES DE EMPAREJAR - Configura contraseña"
+          echo "=========================================="
+          echo ""
+          echo "Conéctate por SSH primero:"
+          echo "  ssh -p $NGROK_PORT runner@$NGROK_HOST"
+          echo ""
+          echo "Luego ejecuta:"
+          echo "  sudo passwd runner"
+          echo "  (Enter para old password, luego escribe: runner123)"
+          echo ""
+          echo "=========================================="
+          
+          # Guardar para uso posterior
+          echo "NGROK_HOST=$NGROK_HOST" >> $GITHUB_ENV
+          echo "NGROK_PORT=$NGROK_PORT" >> $GITHUB_ENV
+      
+      - name: Usar tmate como respaldo
         uses: mxschmitt/action-tmate@v3
         timeout-minutes: 350
         with:
           detached: true
-      
-      - name: Mostrar instrucciones
-        run: |
-          echo ""
-          echo "=========================================="
-          echo "📋 CÓMO CONECTARTE DESDE WINDOWS"
-          echo "=========================================="
-          echo ""
-          echo "🎯 OPCIÓN 1: SSH DIRECTO (Terminal)"
-          echo "----------------------------------------"
-          echo ""
-          echo "1. Busca arriba el comando: ssh xxxxx@xxx.tmate.io"
-          echo "2. Ejecútalo en PowerShell"
-          echo "3. ¡Ya tienes acceso al macOS!"
-          echo ""
-          echo "=========================================="
-          echo "🎯 OPCIÓN 2: VISUAL STUDIO 2022 (Pair to Mac)"
-          echo "=========================================="
-          echo ""
-          echo "Para emparejar Visual Studio con este Mac:"
-          echo ""
-          echo "PASO 1 - En PowerShell, ejecuta (reemplaza xxxxx con tu código tmate):"
-          echo "   ssh -L 22:localhost:22 xxxxx@xxx.tmate.io"
-          echo ""
-          echo "PASO 2 - Deja esa ventana abierta (mantiene el túnel)"
-          echo ""
-          echo "PASO 3 - En Visual Studio 2022:"
-          echo "   • Herramientas > iOS > Emparejar con Mac"
-          echo "   • Clic en 'Agregar Mac...'"
-          echo "   • Dirección IP: localhost"
-          echo "   • Usuario: runner"
-          echo "   • Contraseña: (dejar vacío, usa clave SSH de tmate)"
-          echo ""
-          echo "⚠️  NOTA: Si pide contraseña, primero configura una:"
-          echo "   En la sesión SSH ejecuta: sudo dscl . -passwd /Users/runner TU_CONTRASEÑA"
-          echo ""
-          echo "=========================================="
-          echo "📱 COMANDOS ÚTILES PARA EL SIMULADOR"
-          echo "----------------------------------------"
-          echo ""
-          echo "Ver simuladores:"
-          echo "  xcrun simctl list devices available"
-          echo ""
-          echo "Iniciar simulador:"
-          echo "  xcrun simctl boot 'iPhone 16 Pro'"
-          echo "  open -a Simulator"
-          echo ""
-          echo "📸 Capturar screenshot:"
-          echo "  ~/screenshot.sh"
-          echo ""
-          echo "🔧 Compilar .NET MAUI:"
-          echo "  dotnet build -f net10.0-ios"
-          echo ""
-          echo "=========================================="
       
       - name: Iniciar Simulator
         run: |
@@ -125,46 +136,39 @@ jobs:
             echo "📱 Iniciando iPhone 16 Pro: $DEVICE_UUID"
             xcrun simctl boot "$DEVICE_UUID" 2>/dev/null || true
             open -a Simulator
-            sleep 10
-            
-            # Capturar screenshot inicial
-            xcrun simctl io booted screenshot ~/Screenshots/simulator_inicial.png 2>/dev/null || true
-            echo "✅ Simulator iniciado - Screenshot guardado en ~/Screenshots/"
+            sleep 5
+            echo "✅ Simulator iniciado"
           else
-            echo "⚠️ No se encontró iPhone 16 Pro"
+            echo "⚠️ No se encontró iPhone 16 Pro, abriendo Simulator"
             open -a Simulator
           fi
       
-      - name: Iniciar servidor HTTP para screenshots
+      - name: Crear scripts de ayuda
         run: |
-          cd ~/Screenshots
-          python3 -m http.server 8080 &
-          sleep 2
-          echo "✅ Servidor HTTP iniciado en puerto 8080"
-          echo "📁 Los screenshots estarán en ~/Screenshots/"
-      
-      - name: Crear script de ayuda
-        run: |
+          mkdir -p ~/Screenshots
+          
           cat > ~/screenshot.sh << 'SCRIPT'
           #!/bin/bash
           FILENAME="screen_$(date +%Y%m%d_%H%M%S).png"
           xcrun simctl io booted screenshot ~/Screenshots/$FILENAME
-          echo "✅ Screenshot guardado: ~/Screenshots/$FILENAME"
-          echo "📁 Ver todos: ls ~/Screenshots/"
+          echo "✅ Screenshot: ~/Screenshots/$FILENAME"
           SCRIPT
           chmod +x ~/screenshot.sh
           
-          cat > ~/grabar.sh << 'SCRIPT'
+          cat > ~/info.sh << 'SCRIPT'
           #!/bin/bash
-          FILENAME="video_$(date +%Y%m%d_%H%M%S).mov"
-          echo "🎬 Grabando... Presiona Ctrl+C para detener"
-          xcrun simctl io booted recordVideo ~/Screenshots/$FILENAME
+          echo "=========================================="
+          echo "📋 INFORMACIÓN DE CONEXIÓN"
+          echo "=========================================="
+          curl -s http://localhost:4040/api/tunnels | grep -oE 'tcp://[^"]+' | head -1
+          echo ""
+          echo "Usuario: runner"
+          echo "Contraseña: (la que configuraste con 'sudo passwd runner')"
+          echo "=========================================="
           SCRIPT
-          chmod +x ~/grabar.sh
+          chmod +x ~/info.sh
           
-          echo "✅ Scripts creados:"
-          echo "   ~/screenshot.sh - Capturar pantalla"
-          echo "   ~/grabar.sh - Grabar video"
+          echo "✅ Scripts creados: ~/screenshot.sh, ~/info.sh"
       
       - name: Mantener servidor activo
         run: |
@@ -173,15 +177,14 @@ jobs:
           echo "🚀 SERVIDOR ACTIVO"
           echo "=========================================="
           echo ""
-          echo "📝 CONEXIÓN SSH:"
-          echo "   Busca arriba: ssh xxxxx@xxx.tmate.io"
+          echo "📡 SSH: ssh -p $NGROK_PORT runner@$NGROK_HOST"
           echo ""
-          echo "🔗 PARA VISUAL STUDIO (Pair to Mac):"
-          echo "   1. PowerShell: ssh -L 22:localhost:22 xxxxx@xxx.tmate.io"
-          echo "   2. VS2022: Emparejar con Mac > Agregar Mac > localhost"
-          echo "   3. Usuario: runner | Contraseña: runner123"
+          echo "🔗 Para Visual Studio 2022:"
+          echo "   Host: ${NGROK_HOST}:${NGROK_PORT}"
+          echo "   Usuario: runner"
           echo ""
           echo "📸 Para screenshots: ~/screenshot.sh"
+          echo "📋 Ver info: ~/info.sh"
           echo ""
           echo "💡 Cancela el workflow cuando termines"
           echo ""
@@ -189,6 +192,13 @@ jobs:
           
           while true; do
             sleep 60
+            
+            # Verificar que ngrok siga activo
+            if ! pgrep -f ngrok > /dev/null; then
+              echo "⚠️ ngrok se detuvo, reiniciando..."
+              ngrok tcp 22 --log=stdout > ngrok.log 2>&1 &
+              sleep 5
+            fi
             
             # Mantener Simulator activo
             if ! pgrep -f Simulator > /dev/null; then
@@ -202,5 +212,5 @@ jobs:
         if: always()
         run: |
           echo "🧹 Limpiando..."
-          pkill -f "python3 -m http.server" || true
+          pkill ngrok || true
           echo "✅ Limpieza completada"
