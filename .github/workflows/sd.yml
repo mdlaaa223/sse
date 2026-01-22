@@ -53,6 +53,22 @@ jobs:
           # Iniciar el servicio de Screen Sharing
           sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null || true
           
+          # Esperar a que el servicio inicie
+          sleep 5
+          
+          # Verificar que el puerto 5900 esté escuchando
+          echo "🔍 Verificando puerto 5900..."
+          if lsof -i :5900 > /dev/null 2>&1; then
+            echo "✅ Puerto 5900 está escuchando"
+            lsof -i :5900
+          else
+            echo "⚠️ Puerto 5900 no está activo, intentando iniciar manualmente..."
+            # Reiniciar el agente ARD
+            sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -restart -agent
+            sleep 3
+            lsof -i :5900 || echo "❌ VNC no pudo iniciarse"
+          fi
+          
           echo "=========================================="
           echo "🔐 VNC CONFIGURADO"
           echo "=========================================="
@@ -171,17 +187,21 @@ jobs:
           echo "📱 Buscando simuladores disponibles..."
           xcrun simctl list devices available | grep -E "iPhone|iPad" | head -10
           
-          # Obtener el primer iPhone disponible
-          DEVICE=$(xcrun simctl list devices available | grep "iPhone" | head -1 | sed 's/.*(\([^)]*\)).*/\1/' | head -1)
+          # Obtener el UUID del primer iPhone disponible
+          DEVICE_UUID=$(xcrun simctl list devices available | grep "iPhone 16 Pro (" | head -1 | grep -oE '[A-F0-9-]{36}')
           
-          if [ -n "$DEVICE" ]; then
-            echo "📱 Iniciando dispositivo: $DEVICE"
-            xcrun simctl boot "$DEVICE" || true
+          if [ -n "$DEVICE_UUID" ]; then
+            echo "📱 Iniciando dispositivo UUID: $DEVICE_UUID"
+            xcrun simctl boot "$DEVICE_UUID" || true
             open -a Simulator
             sleep 5
-            echo "✅ Simulator listo con $DEVICE"
+            echo "✅ Simulator listo"
           else
-            echo "⚠️ No se encontró iPhone, abriendo Simulator vacío"
+            echo "⚠️ No se encontró iPhone 16 Pro, intentando iPhone 16..."
+            DEVICE_UUID=$(xcrun simctl list devices available | grep "iPhone 16 (" | head -1 | grep -oE '[A-F0-9-]{36}')
+            if [ -n "$DEVICE_UUID" ]; then
+              xcrun simctl boot "$DEVICE_UUID" || true
+            fi
             open -a Simulator
           fi
       
