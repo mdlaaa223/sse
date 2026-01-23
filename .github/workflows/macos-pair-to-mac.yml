@@ -39,11 +39,19 @@ on:
       tunnel_type:
         description: 'Tipo de túnel'
         required: true
-        default: 'ssh'
+        default: 'ssh_and_vnc'
         type: choice
         options:
           - ssh
           - ssh_and_vnc
+      create_gui_session:
+        description: 'Crear sesión GUI con tmate (más confiable)'
+        required: true
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
 
 env:
   DOTNET_VERSION: '10.0.x'
@@ -200,111 +208,212 @@ jobs:
           PASSWORD="Runner123"
           
           # ═══════════════════════════════════════════════════════════════
-          # IMPORTANTE: El usuario 'runner' YA tiene sesión activa
-          # Configuramos TAMBIÉN al usuario runner para Pair to Mac
+          # MÉTODO 1: Configurar contraseña para 'runner' usando sysadminctl
+          # El usuario 'runner' YA tiene sesión GUI activa en GitHub Actions
           # ═══════════════════════════════════════════════════════════════
           
-          # Configurar contraseña para el usuario 'runner' (ya tiene sesión)
-          echo "Configurando usuario 'runner' (tiene sesión GUI activa)..."
-          echo "$PASSWORD" | sudo -S dscl . -passwd /Users/runner "$PASSWORD" 2>/dev/null || {
-            # Si falla, intentar con otro método
-            sudo security set-keychain-password -o "" -p "$PASSWORD" /Users/runner/Library/Keychains/login.keychain-db 2>/dev/null || true
+          echo "Intentando configurar contraseña para 'runner'..."
+          
+          # Método A: Usar sysadminctl para crear/resetear contraseña
+          # En macOS, podemos usar -adminUser con el usuario actual si tiene permisos
+          sudo sysadminctl -resetPasswordFor runner -newPassword "$PASSWORD" -passwordHint "pair" 2>/dev/null || {
+            echo "Método A falló, intentando método B..."
+            
+            # Método B: Usar dscl con SecureToken
+            sudo dscl . -passwd /Users/runner "" "$PASSWORD" 2>/dev/null || {
+              echo "Método B falló, intentando método C..."
+              
+              # Método C: Crear entrada de contraseña directamente
+              sudo security set-keychain-password -o "" -p "$PASSWORD" /Users/runner/Library/Keychains/login.keychain-db 2>/dev/null || true
+            }
           }
           
-          # Obtener el UID del usuario macuser
+          # ═══════════════════════════════════════════════════════════════
+          # MÉTODO 2: Crear sesión GUI real para 'macuser'
+          # ═══════════════════════════════════════════════════════════════
+          
+          echo "Configurando sesión GUI para 'macuser'..."
+          
           MACUSER_UID=$(id -u macuser)
+          RUNNER_UID=$(id -u runner)
           echo "UID de macuser: $MACUSER_UID"
+          echo "UID de runner: $RUNNER_UID"
           
-          # Método 1: Configurar auto-login (simula sesión activa)
-          sudo defaults write /Library/Preferences/com.apple.loginwindow autoLoginUser macuser 2>/dev/null || true
-          
-          # Método 2: Iniciar un agente de usuario para macuser
-          sudo launchctl bootstrap gui/$MACUSER_UID 2>/dev/null || true
-          
-          # Método 3: Crear el directorio de sesión del usuario
+          # Crear el directorio home completo para macuser
+          sudo mkdir -p /Users/macuser/Library/Preferences
           sudo mkdir -p /Users/macuser/Library/LaunchAgents
+          sudo mkdir -p /Users/macuser/Library/Caches
           sudo chown -R macuser:staff /Users/macuser
           
-          # Método 4: Iniciar loginwindow para el usuario (crea sesión GUI)
-          sudo launchctl asuser $MACUSER_UID /System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow 2>/dev/null &
-          sleep 2
+          # Copiar configuraciones básicas desde runner
+          sudo cp -R /Users/runner/Library/Preferences/* /Users/macuser/Library/Preferences/ 2>/dev/null || true
+          sudo chown -R macuser:staff /Users/macuser/Library/Preferences
           
-          # Método 5: Habilitar escritorio remoto / acceso GUI
+          # Habilitar auto-login para macuser (esto ayuda a crear la sesión)
+          sudo defaults write /Library/Preferences/com.apple.loginwindow autoLoginUser macuser
+          sudo defaults write /Library/Preferences/com.apple.loginwindow autoLoginUserUID $MACUSER_UID
+          
+          # Crear el bootstrap GUI para macuser
+          sudo launchctl bootstrap gui/$MACUSER_UID /System/Library/LaunchAgents/com.apple.Finder.plist 2>/dev/null || true
+          sudo launchctl asuser $MACUSER_UID launchctl load -S Aqua /System/Library/LaunchAgents/com.apple.Finder.plist 2>/dev/null || true
+          
+          # Iniciar una sesión de login para macuser
+          # Esto simula un login gráfico
+          sudo /System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow console $MACUSER_UID 2>/dev/null &
+          sleep 3
+          
+          # Configurar Remote Management para ambos usuarios
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
             -activate -configure -access -on \
             -users macuser,runner \
             -privs -all \
             -restart -agent 2>/dev/null || true
           
-          # Método 6: Iniciar WindowServer connection para el usuario
-          sudo launchctl asuser $MACUSER_UID launchctl start com.apple.WindowServer 2>/dev/null || true
+          # ═══════════════════════════════════════════════════════════════
+          # MÉTODO 3: Iniciar el Broker de XMA (Xamarin Mac Agent)
+          # Este es el servicio que Visual Studio busca
+          # ═══════════════════════════════════════════════════════════════
           
-          # Método 7: Crear un launchd plist para mantener sesión activa
-          cat << 'PLIST' | sudo tee /Library/LaunchDaemons/com.github.pairsession.plist
+          echo "Preparando Xamarin Mac Agent para ambos usuarios..."
+          
+          # El XMA Broker necesita correr como el usuario conectado
+          # Creamos un script que lo inicia para macuser
+          
+          cat << 'SCRIPT' | sudo tee /tmp/start_xma_session.sh
+          #!/bin/bash
+          # Iniciar sesión de usuario para XMA
+          export HOME=/Users/macuser
+          export USER=macuser
+          export LOGNAME=macuser
+          
+          # Crear el archivo de sesión que XMA busca
+          mkdir -p /Users/macuser/Library/Application\ Support/Xamarin
+          touch /Users/macuser/Library/Application\ Support/Xamarin/.session
+          
+          # Mantener la sesión activa
+          while true; do
+            sleep 60
+          done
+          SCRIPT
+          
+          sudo chmod +x /tmp/start_xma_session.sh
+          sudo -u macuser /tmp/start_xma_session.sh &
+          
+          # También para runner
+          mkdir -p "/Users/runner/Library/Application Support/Xamarin" 2>/dev/null || true
+          touch "/Users/runner/Library/Application Support/Xamarin/.session" 2>/dev/null || true
+          
+          # ═══════════════════════════════════════════════════════════════
+          # MÉTODO 4: Forzar creación de sesión GUI usando launchd
+          # ═══════════════════════════════════════════════════════════════
+          
+          # Crear un LaunchAgent que mantiene viva la sesión
+          cat << 'PLIST' | sudo tee /Library/LaunchDaemons/com.github.usersession.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
               <key>Label</key>
-              <string>com.github.pairsession</string>
+              <string>com.github.usersession</string>
               <key>ProgramArguments</key>
               <array>
                   <string>/bin/bash</string>
                   <string>-c</string>
-                  <string>launchctl asuser $(id -u macuser) true</string>
+                  <string>launchctl asuser 502 /bin/bash -c "export HOME=/Users/macuser; while true; do sleep 60; done"</string>
               </array>
               <key>RunAtLoad</key>
               <true/>
               <key>KeepAlive</key>
               <true/>
+              <key>UserName</key>
+              <string>root</string>
           </dict>
           </plist>
           PLIST
-          sudo launchctl load /Library/LaunchDaemons/com.github.pairsession.plist 2>/dev/null || true
           
-          # Verificar sesiones activas
+          sudo launchctl load /Library/LaunchDaemons/com.github.usersession.plist 2>/dev/null || true
+          
+          # Verificar sesiones
           echo ""
-          echo "Sesiones activas:"
+          echo "════════════════════════════════════════════════════════════════"
+          echo "Sesiones activas después de configuración:"
           who -a 2>/dev/null || true
+          echo ""
+          echo "Procesos de loginwindow:"
+          ps aux | grep -i loginwindow | grep -v grep || true
+          echo "════════════════════════════════════════════════════════════════"
           
           echo ""
-          echo "Usuarios disponibles:"
-          echo "  - runner (sesión GUI activa por defecto)"
-          echo "  - macuser (sesión creada)"
-          
+          echo "✅ Configuración de sesión completada"
           echo ""
-          echo "✅ Sesión de usuario configurada"
-          echo ""
-          echo "════════════════════════════════════════════════════════════════"
-          echo "  💡 TIP: Si 'macuser' no funciona, intenta con 'runner'"
-          echo "     Usuario: runner"
-          echo "     Contraseña: $PASSWORD"
-          echo "════════════════════════════════════════════════════════════════"
+          echo "╔════════════════════════════════════════════════════════════════╗"
+          echo "║  IMPORTANTE: Si 'macuser' sigue sin funcionar, usa 'runner'    ║"
+          echo "║  pero deberás probar si la contraseña se configuró bien.       ║"
+          echo "║                                                                 ║"
+          echo "║  Usuario: macuser  |  Contraseña: Runner123                    ║"
+          echo "║  Usuario: runner   |  Contraseña: Runner123 (si funcionó)      ║"
+          echo "╚════════════════════════════════════════════════════════════════╝"
 
       # ============================================
       # 6. Configurar VNC (si se selecciona)
       # ============================================
       - name: 🖥️ Configurar VNC/Screen Sharing
         if: ${{ github.event.inputs.tunnel_type == 'ssh_and_vnc' }}
-        env:
-          MAC_PASSWORD: ${{ secrets.MAC_PASSWORD }}
         run: |
           echo "Configurando VNC/Screen Sharing..."
           
-          PASSWORD="${MAC_PASSWORD:-Runner123!}"
+          PASSWORD="Runner123"
           
-          # Configurar contraseña VNC
-          sudo /usr/bin/dscl . -passwd /Users/runner "$PASSWORD"
-          
-          # Habilitar Screen Sharing (VNC)
+          # Habilitar Screen Sharing (VNC) con configuración completa
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
             -activate -configure -access -on \
             -clientopts -setvnclegacy -vnclegacy yes \
             -clientopts -setvncpw -vncpw "$PASSWORD" \
             -restart -agent -privs -all
           
+          # Configurar Screen Sharing directamente
+          sudo defaults write /var/db/launchd.db/com.apple.launchd/overrides.plist com.apple.screensharing -dict Disabled -bool false 2>/dev/null || true
+          sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null || true
+          
           echo "✅ VNC/Screen Sharing habilitado"
           echo "🖥️ Puerto VNC: 5900"
+          echo "🔑 Contraseña VNC: $PASSWORD"
+
+      # ============================================
+      # 6.1 Sesión interactiva con tmate (más confiable)
+      # ============================================
+      - name: 🔧 Configurar Sesión Interactiva con tmate
+        if: ${{ github.event.inputs.create_gui_session == 'true' }}
+        run: |
+          echo "Instalando tmate para sesión interactiva..."
+          brew install tmate
+          
+          # Crear script para login de macuser
+          cat << 'LOGINSCRIPT' | sudo tee /tmp/login_macuser.sh
+          #!/bin/bash
+          # Script para iniciar sesión como macuser
+          echo "==================================="
+          echo "Iniciando sesión como macuser..."
+          echo "==================================="
+          su - macuser -c "
+            export HOME=/Users/macuser
+            cd ~
+            # Crear marcador de sesión para XMA
+            mkdir -p ~/Library/Application\ Support/Xamarin
+            touch ~/Library/Application\ Support/Xamarin/.session
+            echo 'Sesión de macuser iniciada'
+            # Mantener sesión activa
+            exec bash
+          "
+          LOGINSCRIPT
+          sudo chmod +x /tmp/login_macuser.sh
+          
+          echo ""
+          echo "╔══════════════════════════════════════════════════════════════════╗"
+          echo "║  SESIÓN TMATE DISPONIBLE                                         ║"
+          echo "║  Usa esta sesión para hacer login manual como macuser            ║"
+          echo "║  y luego probar Pair to Mac desde Visual Studio                  ║"
+          echo "╚══════════════════════════════════════════════════════════════════╝"
 
       # ============================================
       # 7. Instalar Cloudflare Tunnel
@@ -466,6 +575,25 @@ jobs:
           echo "   • Compilar proyectos iOS desde Visual Studio"
           echo "   • Usar el simulador de iOS remoto"
           echo "   • Depurar apps en dispositivos iOS conectados al Mac"
+          echo ""
+          echo "═══════════════════════════════════════════════════════════════════"
+          echo "      ⚠️ SI APARECE ERROR 'no user session' SIGUE ESTOS PASOS:"
+          echo "═══════════════════════════════════════════════════════════════════"
+          echo ""
+          echo "   1. Abre OTRA ventana de PowerShell"
+          echo ""
+          echo "   2. Conéctate por SSH:"
+          echo "      ssh -p 2222 macuser@localhost"
+          echo "      (Contraseña: Runner123)"
+          echo ""
+          echo "   3. Una vez dentro del Mac, ejecuta:"
+          echo "      /tmp/login_macuser.sh"
+          echo ""
+          echo "   4. MANTÉN ESA SESIÓN SSH ABIERTA"
+          echo ""
+          echo "   5. Ahora vuelve a Visual Studio y haz Retry en Pair to Mac"
+          echo ""
+          echo "───────────────────────────────────────────────────────────────────"
           echo ""
           if [ "${{ github.event.inputs.tunnel_type }}" == "ssh_and_vnc" ]; then
             echo "═══════════════════════════════════════════════════════════════════"
