@@ -1,0 +1,390 @@
+# ================================================================================
+# GitHub Workflow: Pair to Mac - Conectar Visual Studio Windows con Mac remoto
+# ================================================================================
+# Este workflow crea un túnel seguro para emparejar Visual Studio 2022/2026 
+# con un Mac remoto de GitHub Actions para compilar apps iOS.
+#
+# ¡¡ GRATIS - NO REQUIERE TARJETA DE CRÉDITO !!
+# Usa Cloudflare Tunnel (cloudflared) que es completamente gratuito.
+#
+# INSTRUCCIONES:
+# 1. Configura los secrets en GitHub (Settings > Secrets > Actions):
+#    - MAC_PASSWORD: Contraseña para el usuario del Mac
+#
+# 2. Ejecuta este workflow manualmente desde Actions
+#
+# 3. Espera a que aparezca la URL del túnel en los logs
+#
+# 4. En tu Windows local, instala cloudflared:
+#    winget install Cloudflare.cloudflared
+#    o descarga de: https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/installation/
+#
+# 5. Configura el túnel en tu máquina local (PowerShell):
+#    cloudflared access tcp --hostname <URL_DEL_TUNEL> --url localhost:22
+#
+# 6. En Visual Studio: Tools > Options > Xamarin > iOS Settings
+#    - Mac Host: localhost
+#    - Port: 22
+#    - Username: runner
+#    - Password: (el que configuraste en MAC_PASSWORD)
+#
+# NOTA: El workflow dura máximo 6 horas (límite de GitHub Actions)
+# ================================================================================
+
+name: 🍎 Pair to Mac (Visual Studio)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tunnel_type:
+        description: 'Tipo de túnel'
+        required: true
+        default: 'ssh'
+        type: choice
+        options:
+          - ssh
+          - ssh_and_vnc
+
+env:
+  DOTNET_VERSION: '10.0.x'
+  DOTNET_NOLOGO: true
+
+jobs:
+  pair-to-mac:
+    name: 🖥️ Mac disponible para emparejar
+    runs-on: macos-26
+    timeout-minutes: 360  # Máximo 6 horas
+    
+    steps:
+      # ============================================
+      # 1. Checkout del código (opcional, para tener el proyecto)
+      # ============================================
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # ============================================
+      # 2. Mostrar información del sistema
+      # ============================================
+      - name: 📋 Información del Sistema
+        run: |
+          echo "============================================"
+          echo "   INFORMACIÓN DEL MAC REMOTO"
+          echo "============================================"
+          echo ""
+          echo "🖥️  macOS Version:"
+          sw_vers
+          echo ""
+          echo "💻 Hardware:"
+          system_profiler SPHardwareDataType | grep -E "Model|Processor|Memory|Cores"
+          echo ""
+          echo "🔧 Xcode Version:"
+          xcodebuild -version
+          echo ""
+          echo "📱 iOS SDKs disponibles:"
+          xcodebuild -showsdks | grep -i ios
+          echo ""
+          echo "🔷 .NET SDK:"
+          dotnet --version
+          echo ""
+          echo "👤 Usuario actual:"
+          whoami
+          echo ""
+          echo "🏠 Directorio home:"
+          echo $HOME
+
+      # ============================================
+      # 3. Seleccionar Xcode 26.2
+      # ============================================
+      - name: 🔧 Configurar Xcode 26.2
+        run: |
+          # Buscar Xcode 26.2
+          if [ -d "/Applications/Xcode_26.2.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_26.2.app/Contents/Developer
+            echo "✅ Xcode 26.2 seleccionado"
+          elif [ -d "/Applications/Xcode_26.2.0.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_26.2.0.app/Contents/Developer
+            echo "✅ Xcode 26.2.0 seleccionado"
+          else
+            echo "⚠️ Usando Xcode por defecto"
+          fi
+          xcodebuild -version
+
+      # ============================================
+      # 4. Instalar .NET MAUI workloads
+      # ============================================
+      - name: 📦 Instalar .NET MAUI Workloads
+        run: |
+          echo "Instalando workloads de MAUI..."
+          dotnet workload install maui
+          echo ""
+          echo "✅ Workloads instalados:"
+          dotnet workload list
+
+      # ============================================
+      # 5. Configurar SSH para conexión remota
+      # ============================================
+      - name: 🔐 Configurar SSH y Acceso Remoto
+        env:
+          MAC_PASSWORD: ${{ secrets.MAC_PASSWORD }}
+        run: |
+          echo "Configurando SSH..."
+          
+          # Establecer contraseña para el usuario runner
+          PASSWORD="${MAC_PASSWORD:-Runner123!}"
+          echo -e "$PASSWORD\n$PASSWORD" | sudo passwd runner
+          
+          # Habilitar login remoto (SSH)
+          sudo systemsetup -setremotelogin on
+          
+          # Configurar SSH para permitir autenticación por contraseña
+          sudo sed -i '' 's/^#PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo sed -i '' 's/^PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo sed -i '' 's/^#ChallengeResponseAuthentication.*/ChallengeResponseAuthentication yes/' /etc/ssh/sshd_config
+          sudo sed -i '' 's/^ChallengeResponseAuthentication.*/ChallengeResponseAuthentication yes/' /etc/ssh/sshd_config
+          
+          # Reiniciar servicio SSH
+          sudo launchctl unload /System/Library/LaunchDaemons/ssh.plist 2>/dev/null || true
+          sudo launchctl load -w /System/Library/LaunchDaemons/ssh.plist
+          
+          echo "✅ SSH configurado correctamente"
+          echo ""
+          echo "👤 Usuario SSH: runner"
+          echo "🔑 Contraseña: (la configurada en secrets.MAC_PASSWORD o 'Runner123!')"
+
+      # ============================================
+      # 6. Configurar VNC (si se selecciona)
+      # ============================================
+      - name: 🖥️ Configurar VNC/Screen Sharing
+        if: ${{ github.event.inputs.tunnel_type == 'ssh_and_vnc' }}
+        env:
+          MAC_PASSWORD: ${{ secrets.MAC_PASSWORD }}
+        run: |
+          echo "Configurando VNC/Screen Sharing..."
+          
+          PASSWORD="${MAC_PASSWORD:-Runner123!}"
+          
+          # Configurar contraseña VNC
+          sudo /usr/bin/dscl . -passwd /Users/runner "$PASSWORD"
+          
+          # Habilitar Screen Sharing (VNC)
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+            -activate -configure -access -on \
+            -clientopts -setvnclegacy -vnclegacy yes \
+            -clientopts -setvncpw -vncpw "$PASSWORD" \
+            -restart -agent -privs -all
+          
+          echo "✅ VNC/Screen Sharing habilitado"
+          echo "🖥️ Puerto VNC: 5900"
+
+      # ============================================
+      # 7. Instalar Cloudflare Tunnel
+      # ============================================
+      - name: ☁️ Instalar Cloudflare Tunnel
+        run: |
+          echo "Instalando cloudflared..."
+          brew install cloudflare/cloudflare/cloudflared
+          cloudflared --version
+          echo "✅ Cloudflared instalado"
+
+      # ============================================
+      # 8. Iniciar túnel SSH
+      # ============================================
+      - name: 🚇 Iniciar Túnel SSH
+        id: ssh_tunnel
+        run: |
+          echo "Iniciando túnel SSH con Cloudflare..."
+          
+          # Iniciar túnel en background
+          nohup cloudflared tunnel --url tcp://localhost:22 --logfile /tmp/ssh_tunnel.log 2>&1 &
+          SSH_TUNNEL_PID=$!
+          echo "SSH_TUNNEL_PID=$SSH_TUNNEL_PID" >> $GITHUB_ENV
+          
+          # Esperar a que el túnel esté listo
+          echo "Esperando a que el túnel esté listo..."
+          sleep 15
+          
+          # Obtener URL del túnel
+          SSH_TUNNEL_URL=$(grep -m 1 -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' /tmp/ssh_tunnel.log || echo "")
+          
+          if [ -z "$SSH_TUNNEL_URL" ]; then
+            echo "Reintentando obtener URL..."
+            sleep 10
+            SSH_TUNNEL_URL=$(grep -m 1 -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' /tmp/ssh_tunnel.log || echo "URL_NO_DISPONIBLE")
+          fi
+          
+          # Convertir a hostname sin https://
+          SSH_TUNNEL_HOST=$(echo "$SSH_TUNNEL_URL" | sed 's|https://||')
+          
+          echo "SSH_TUNNEL_URL=$SSH_TUNNEL_URL" >> $GITHUB_ENV
+          echo "SSH_TUNNEL_HOST=$SSH_TUNNEL_HOST" >> $GITHUB_ENV
+          echo "ssh_url=$SSH_TUNNEL_HOST" >> $GITHUB_OUTPUT
+          
+          echo ""
+          echo "✅ Túnel SSH iniciado"
+          echo "🔗 URL: $SSH_TUNNEL_URL"
+
+      # ============================================
+      # 9. Iniciar túnel VNC (si se selecciona)
+      # ============================================
+      - name: 🚇 Iniciar Túnel VNC
+        id: vnc_tunnel
+        if: ${{ github.event.inputs.tunnel_type == 'ssh_and_vnc' }}
+        run: |
+          echo "Iniciando túnel VNC con Cloudflare..."
+          
+          # Iniciar túnel en background
+          nohup cloudflared tunnel --url tcp://localhost:5900 --logfile /tmp/vnc_tunnel.log 2>&1 &
+          VNC_TUNNEL_PID=$!
+          echo "VNC_TUNNEL_PID=$VNC_TUNNEL_PID" >> $GITHUB_ENV
+          
+          # Esperar a que el túnel esté listo
+          sleep 15
+          
+          # Obtener URL del túnel
+          VNC_TUNNEL_URL=$(grep -m 1 -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' /tmp/vnc_tunnel.log || echo "URL_NO_DISPONIBLE")
+          VNC_TUNNEL_HOST=$(echo "$VNC_TUNNEL_URL" | sed 's|https://||')
+          
+          echo "VNC_TUNNEL_URL=$VNC_TUNNEL_URL" >> $GITHUB_ENV
+          echo "VNC_TUNNEL_HOST=$VNC_TUNNEL_HOST" >> $GITHUB_ENV
+          
+          echo ""
+          echo "✅ Túnel VNC iniciado"
+          echo "🔗 URL: $VNC_TUNNEL_URL"
+
+      # ============================================
+      # 10. Mostrar instrucciones de conexión
+      # ============================================
+      - name: 📋 Instrucciones de Conexión
+        run: |
+          echo ""
+          echo "╔══════════════════════════════════════════════════════════════════╗"
+          echo "║                                                                    ║"
+          echo "║   🍎 MAC REMOTO LISTO PARA EMPAREJAR CON VISUAL STUDIO 🍎        ║"
+          echo "║                                                                    ║"
+          echo "╚══════════════════════════════════════════════════════════════════╝"
+          echo ""
+          echo "═══════════════════════════════════════════════════════════════════"
+          echo "                    INFORMACIÓN DE CONEXIÓN"
+          echo "═══════════════════════════════════════════════════════════════════"
+          echo ""
+          echo "🔗 Túnel SSH:     $SSH_TUNNEL_URL"
+          echo "👤 Usuario:       runner"
+          echo "🔑 Contraseña:    ${MAC_PASSWORD:-Runner123!}"
+          echo "⏱️  Duración:      Hasta que canceles el workflow manualmente"
+          echo ""
+          if [ "${{ github.event.inputs.tunnel_type }}" == "ssh_and_vnc" ]; then
+            echo "🖥️  Túnel VNC:     $VNC_TUNNEL_URL"
+            echo ""
+          fi
+          echo "═══════════════════════════════════════════════════════════════════"
+          echo "           PASOS PARA CONECTAR DESDE WINDOWS"
+          echo "═══════════════════════════════════════════════════════════════════"
+          echo ""
+          echo "📥 PASO 1: Instalar cloudflared en tu Windows"
+          echo "   Abre PowerShell como Administrador y ejecuta:"
+          echo ""
+          echo "   winget install Cloudflare.cloudflared"
+          echo ""
+          echo "   O descarga manualmente de:"
+          echo "   https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/installation/"
+          echo ""
+          echo "───────────────────────────────────────────────────────────────────"
+          echo ""
+          echo "🔌 PASO 2: Crear túnel local (PowerShell)"
+          echo "   Ejecuta este comando para crear el túnel:"
+          echo ""
+          echo "   cloudflared access tcp --hostname $SSH_TUNNEL_HOST --url localhost:2222"
+          echo ""
+          echo "   ⚠️  Mantén esta ventana abierta mientras uses el Mac"
+          echo ""
+          echo "───────────────────────────────────────────────────────────────────"
+          echo ""
+          echo "🔧 PASO 3: Configurar Visual Studio"
+          echo ""
+          echo "   A) Ve a: Tools > Options > Xamarin > iOS Settings"
+          echo ""
+          echo "   B) En 'Pair to Mac', configura:"
+          echo "      • Host:     localhost"
+          echo "      • Port:     2222"
+          echo ""
+          echo "   C) Haz clic en 'Pair' e ingresa:"
+          echo "      • Username: runner"
+          echo "      • Password: ${MAC_PASSWORD:-Runner123!}"
+          echo ""
+          echo "───────────────────────────────────────────────────────────────────"
+          echo ""
+          echo "✅ PASO 4: ¡Listo!"
+          echo "   Una vez emparejado, podrás:"
+          echo "   • Compilar proyectos iOS desde Visual Studio"
+          echo "   • Usar el simulador de iOS remoto"
+          echo "   • Depurar apps en dispositivos iOS conectados al Mac"
+          echo ""
+          if [ "${{ github.event.inputs.tunnel_type }}" == "ssh_and_vnc" ]; then
+            echo "═══════════════════════════════════════════════════════════════════"
+            echo "              CONEXIÓN VNC (ESCRITORIO REMOTO)"
+            echo "═══════════════════════════════════════════════════════════════════"
+            echo ""
+            echo "🖥️  PASO 1: Crear túnel VNC (en otra ventana de PowerShell):"
+            echo ""
+            echo "   cloudflared access tcp --hostname $VNC_TUNNEL_HOST --url localhost:5900"
+            echo ""
+            echo "🖥️  PASO 2: Conectar con cliente VNC a: localhost:5900"
+            echo ""
+          fi
+          echo "═══════════════════════════════════════════════════════════════════"
+          echo "              ALTERNATIVA: CONEXIÓN SSH DIRECTA"
+          echo "═══════════════════════════════════════════════════════════════════"
+          echo ""
+          echo "   Si prefieres SSH directo desde PowerShell:"
+          echo ""
+          echo "   ssh -o ProxyCommand=\"cloudflared access tcp --hostname $SSH_TUNNEL_HOST\" runner@$SSH_TUNNEL_HOST"
+          echo ""
+          echo "═══════════════════════════════════════════════════════════════════"
+          echo ""
+          echo "📁 Directorio del proyecto: $(pwd)"
+          echo "🔧 Xcode version: $(xcodebuild -version | head -1)"
+          echo "🔷 .NET version: $(dotnet --version)"
+          echo ""
+          echo "═══════════════════════════════════════════════════════════════════"
+        env:
+          MAC_PASSWORD: ${{ secrets.MAC_PASSWORD }}
+
+      # ============================================
+      # 11. Mantener sesión activa
+      # ============================================
+      - name: ⏳ Sesión activa - Cancela el workflow para terminar
+        run: |
+          echo ""
+          echo "═══════════════════════════════════════════════════════════════════"
+          echo "   🟢 SESIÓN ACTIVA - Para terminar, cancela el workflow en GitHub"
+          echo "═══════════════════════════════════════════════════════════════════"
+          echo ""
+          echo "📋 Para cancelar: Ve a Actions > Este workflow > Cancel workflow"
+          echo ""
+          echo "⚠️  Límite máximo de GitHub Actions: 6 horas"
+          echo ""
+          
+          # Mantener activo indefinidamente (hasta el timeout de GitHub o cancelación manual)
+          while true; do
+            echo "⏱️  $(date '+%Y-%m-%d %H:%M:%S') - Sesión activa..."
+            
+            # Verificar que los túneles siguen activos
+            if ! pgrep -f "cloudflared" > /dev/null; then
+              echo "⚠️  Túnel desconectado, reiniciando..."
+              nohup cloudflared tunnel --url tcp://localhost:22 --logfile /tmp/ssh_tunnel.log 2>&1 &
+              sleep 5
+            fi
+            
+            sleep 300  # Mostrar estado cada 5 minutos
+          done
+
+      # ============================================
+      # 12. Limpieza
+      # ============================================
+      - name: 🧹 Limpieza
+        if: always()
+        run: |
+          echo "Limpiando recursos..."
+          pkill -f cloudflared || true
+          sudo systemsetup -setremotelogin off || true
+          echo "✅ Limpieza completada"
