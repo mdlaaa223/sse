@@ -1,0 +1,106 @@
+# ================================================================================
+# GitHub Workflow: Debug macOS - Acceso SSH instantáneo al Mac
+# ================================================================================
+# Este workflow proporciona acceso SSH instantáneo a un Mac de GitHub Actions
+# usando tmate (terminal compartido). Ideal para depuración rápida.
+#
+# ¡¡ GRATIS - NO REQUIERE TARJETA DE CRÉDITO !!
+#
+# CARACTERÍSTICAS:
+# - Acceso SSH inmediato sin configuración adicional
+# - Acceso web shell (navegador)
+# - Autenticación con tu llave SSH de GitHub
+# - Xcode 26.2 y .NET 10 preinstalados
+#
+# INSTRUCCIONES:
+# 1. Ejecuta este workflow manualmente
+# 2. Espera a que aparezcan las URLs en los logs
+# 3. Conéctate vía SSH o web browser
+# ================================================================================
+
+name: 🐚 Debug macOS (SSH Instantáneo)
+
+on:
+  workflow_dispatch:
+    inputs:
+      install_dotnet_maui:
+        description: 'Instalar .NET MAUI workloads'
+        required: true
+        default: true
+        type: boolean
+      session_timeout:
+        description: 'Timeout si no hay conexión (minutos)'
+        required: true
+        default: '30'
+        type: choice
+        options:
+          - '15'
+          - '30'
+          - '60'
+          - '120'
+
+jobs:
+  debug-macos:
+    name: 🍎 Sesión SSH en macOS
+    runs-on: macos-26
+    timeout-minutes: 360
+    
+    steps:
+      # ============================================
+      # 1. Checkout
+      # ============================================
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # ============================================
+      # 2. Información del sistema
+      # ============================================
+      - name: 📋 Información del Sistema
+        run: |
+          echo "═══════════════════════════════════════════════════"
+          echo "            INFORMACIÓN DEL MAC"
+          echo "═══════════════════════════════════════════════════"
+          echo ""
+          echo "🖥️  macOS: $(sw_vers -productVersion)"
+          echo "🔧 Xcode: $(xcodebuild -version | head -1)"
+          echo "🔷 .NET:  $(dotnet --version)"
+          echo "💻 Arch:  $(uname -m)"
+          echo ""
+
+      # ============================================
+      # 3. Seleccionar Xcode 26.2
+      # ============================================
+      - name: 🔧 Configurar Xcode 26.2
+        run: |
+          if [ -d "/Applications/Xcode_26.2.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_26.2.app/Contents/Developer
+            echo "✅ Xcode 26.2 seleccionado"
+          fi
+          xcodebuild -version
+
+      # ============================================
+      # 4. Instalar MAUI (opcional)
+      # ============================================
+      - name: 📦 Instalar .NET MAUI
+        if: ${{ github.event.inputs.install_dotnet_maui == 'true' }}
+        run: |
+          echo "Instalando workloads de MAUI..."
+          dotnet workload install maui
+          echo "✅ MAUI instalado"
+          dotnet workload list
+
+      # ============================================
+      # 5. Iniciar sesión tmate
+      # ============================================
+      - name: 🐚 Iniciar Sesión SSH (tmate)
+        uses: mxschmitt/action-tmate@v3
+        timeout-minutes: 360
+        with:
+          # Solo permite acceso al usuario que inició el workflow
+          limit-access-to-actor: true
+          # Tiempo de espera si nadie se conecta
+          detached: false
+        env:
+          # Para continuar el workflow después de conectarte, ejecuta:
+          # touch /home/runner/continue
+          CONTINUE_FILE: /Users/runner/continue
