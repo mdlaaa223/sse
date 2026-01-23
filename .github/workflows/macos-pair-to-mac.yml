@@ -131,8 +131,15 @@ jobs:
           # Contraseña fija para facilitar la conexión
           PASSWORD="Runner123"
           
-          # Establecer contraseña para el usuario runner usando dscl (más confiable en macOS)
-          sudo dscl . -passwd /Users/runner "$PASSWORD"
+          # Crear un nuevo usuario para SSH (más confiable que modificar runner)
+          # Primero verificamos si ya existe
+          if ! id "macuser" &>/dev/null; then
+            echo "Creando usuario 'macuser' para SSH..."
+            sudo sysadminctl -addUser macuser -password "$PASSWORD" -admin
+          else
+            echo "Usuario macuser ya existe, actualizando contraseña..."
+            sudo sysadminctl -resetPasswordFor macuser -newPassword "$PASSWORD" -adminUser runner -adminPassword ""  2>/dev/null || true
+          fi
           
           # Habilitar login remoto (SSH)
           sudo systemsetup -setremotelogin on
@@ -142,10 +149,18 @@ jobs:
           sudo sed -i '' 's/^PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
           sudo sed -i '' 's/^#KbdInteractiveAuthentication.*/KbdInteractiveAuthentication yes/' /etc/ssh/sshd_config
           sudo sed -i '' 's/^KbdInteractiveAuthentication no/KbdInteractiveAuthentication yes/' /etc/ssh/sshd_config
+          sudo sed -i '' 's/^#UsePAM.*/UsePAM yes/' /etc/ssh/sshd_config
+          sudo sed -i '' 's/^UsePAM no/UsePAM yes/' /etc/ssh/sshd_config
           
-          # Agregar configuraciones si no existen
-          echo "PasswordAuthentication yes" | sudo tee -a /etc/ssh/sshd_config
-          echo "KbdInteractiveAuthentication yes" | sudo tee -a /etc/ssh/sshd_config
+          # Agregar configuraciones explícitas
+          cat << 'EOF' | sudo tee -a /etc/ssh/sshd_config
+          
+          # Configuración para Pair to Mac
+          PasswordAuthentication yes
+          KbdInteractiveAuthentication yes
+          UsePAM yes
+          PermitRootLogin no
+          EOF
           
           # Reiniciar servicio SSH
           sudo launchctl unload /System/Library/LaunchDaemons/ssh.plist 2>/dev/null || true
@@ -156,20 +171,21 @@ jobs:
           if sudo lsof -i :22 | grep -q LISTEN; then
             echo "✅ SSH está escuchando en puerto 22"
           else
-            echo "⚠️ SSH puede no estar funcionando correctamente"
+            echo "⚠️ Intentando iniciar SSH de otra manera..."
+            sudo launchctl start com.openssh.sshd || true
           fi
           
           echo ""
           echo "════════════════════════════════════════════"
           echo "  CREDENCIALES DE ACCESO"
           echo "════════════════════════════════════════════"
-          echo "  👤 Usuario:     runner"
+          echo "  👤 Usuario:     macuser"
           echo "  🔑 Contraseña:  $PASSWORD"
           echo "════════════════════════════════════════════"
           echo ""
           
           # Guardar para usar después
-          echo "MAC_USER=runner" >> $GITHUB_ENV
+          echo "MAC_USER=macuser" >> $GITHUB_ENV
           echo "MAC_PASS=$PASSWORD" >> $GITHUB_ENV
 
       # ============================================
@@ -289,7 +305,7 @@ jobs:
           echo "═══════════════════════════════════════════════════════════════════"
           echo ""
           echo "🔗 Túnel SSH:     $SSH_TUNNEL_URL"
-          echo "👤 Usuario:       runner"
+          echo "👤 Usuario:       macuser"
           echo "🔑 Contraseña:    Runner123"
           echo "⏱️  Duración:      Hasta que canceles el workflow manualmente"
           echo ""
@@ -329,7 +345,7 @@ jobs:
           echo "      • Port:     2222"
           echo ""
           echo "   C) Haz clic en 'Pair' e ingresa:"
-          echo "      • Username: runner"
+          echo "      • Username: macuser"
           echo "      • Password: Runner123"
           echo ""
           echo "───────────────────────────────────────────────────────────────────"
@@ -358,7 +374,7 @@ jobs:
           echo ""
           echo "   Si prefieres SSH directo desde PowerShell:"
           echo ""
-          echo "   ssh -o ProxyCommand=\"cloudflared access tcp --hostname $SSH_TUNNEL_HOST\" runner@$SSH_TUNNEL_HOST"
+          echo "   ssh -o ProxyCommand=\"cloudflared access tcp --hostname $SSH_TUNNEL_HOST\" macuser@$SSH_TUNNEL_HOST"
           echo ""
           echo "═══════════════════════════════════════════════════════════════════"
           echo ""
