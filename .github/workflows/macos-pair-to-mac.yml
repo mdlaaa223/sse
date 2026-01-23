@@ -145,6 +145,59 @@ jobs:
           dotnet workload list
 
       # ============================================
+      # 4.1 Preparar Simulador de iOS (IMPORTANTE para VS remoto)
+      # ============================================
+      - name: 📱 Preparar Simulador de iOS
+        run: |
+          echo "╔══════════════════════════════════════════════════════════════════╗"
+          echo "║  PREPARANDO SIMULADOR DE iOS PARA VISUAL STUDIO REMOTO          ║"
+          echo "╚══════════════════════════════════════════════════════════════════╝"
+          echo ""
+          
+          # Listar todos los simuladores disponibles
+          echo "Simuladores disponibles:"
+          xcrun simctl list devices available
+          echo ""
+          
+          # Obtener el UDID del primer iPhone disponible con iOS 26
+          SIMULATOR_UDID=$(xcrun simctl list devices available | grep -i "iPhone" | grep -i "26" | head -1 | grep -oE '[A-F0-9-]{36}')
+          
+          if [ -z "$SIMULATOR_UDID" ]; then
+            # Si no hay iOS 26, buscar cualquier iPhone
+            SIMULATOR_UDID=$(xcrun simctl list devices available | grep -i "iPhone" | head -1 | grep -oE '[A-F0-9-]{36}')
+          fi
+          
+          if [ -n "$SIMULATOR_UDID" ]; then
+            echo "Simulador encontrado: $SIMULATOR_UDID"
+            
+            # Iniciar el simulador en background
+            echo "Iniciando simulador..."
+            xcrun simctl boot "$SIMULATOR_UDID" 2>/dev/null || echo "Simulador ya iniciado o no disponible"
+            
+            # Abrir la app Simulator (esto es necesario para el streaming remoto)
+            echo "Abriendo aplicación Simulator..."
+            open -a Simulator --background 2>/dev/null || true
+            
+            # Esperar a que el simulador esté listo
+            sleep 5
+            
+            # Verificar estado
+            echo ""
+            echo "Estado del simulador:"
+            xcrun simctl list devices booted
+            
+            echo ""
+            echo "✅ Simulador preparado: $SIMULATOR_UDID"
+          else
+            echo "⚠️ No se encontró ningún simulador de iPhone"
+            echo "Listando todos los dispositivos:"
+            xcrun simctl list devices
+          fi
+          
+          # Guardar UDID para referencia
+          echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> $GITHUB_ENV
+
+      # ============================================
       # 5. Configurar SSH para conexión remota
       # ============================================
       - name: 🔐 Configurar SSH y Acceso Remoto
@@ -371,6 +424,58 @@ jobs:
           echo "╚════════════════════════════════════════════════════════════════╝"
 
       # ============================================
+      # 5.2 Iniciar Simulador en sesión de macuser
+      # ============================================
+      - name: 📱 Iniciar Simulador iOS para Streaming Remoto
+        run: |
+          echo "╔══════════════════════════════════════════════════════════════════╗"
+          echo "║  INICIANDO SIMULADOR iOS PARA VISUAL STUDIO REMOTO              ║"
+          echo "╚══════════════════════════════════════════════════════════════════╝"
+          echo ""
+          
+          MACUSER_UID=$(id -u macuser)
+          
+          # Obtener el UDID del simulador
+          SIMULATOR_UDID=$(xcrun simctl list devices available | grep -i "iPhone" | grep -i "26" | head -1 | grep -oE '[A-F0-9-]{36}')
+          
+          if [ -z "$SIMULATOR_UDID" ]; then
+            SIMULATOR_UDID=$(xcrun simctl list devices available | grep -i "iPhone" | head -1 | grep -oE '[A-F0-9-]{36}')
+          fi
+          
+          if [ -n "$SIMULATOR_UDID" ]; then
+            echo "Simulador: $SIMULATOR_UDID"
+            
+            # Iniciar el simulador como macuser (importante para el streaming)
+            echo "Iniciando simulador como macuser..."
+            sudo -u macuser xcrun simctl boot "$SIMULATOR_UDID" 2>/dev/null || echo "Simulador ya booteado"
+            
+            # Abrir la aplicación Simulator como macuser
+            echo "Abriendo aplicación Simulator como macuser..."
+            sudo launchctl asuser $MACUSER_UID open -a Simulator 2>/dev/null || {
+              sudo -u macuser open -a Simulator 2>/dev/null || true
+            }
+            
+            # Esperar a que el simulador esté completamente listo
+            echo "Esperando a que el simulador esté listo..."
+            sleep 10
+            
+            # Verificar que el simulador está corriendo
+            echo ""
+            echo "Simuladores booteados:"
+            xcrun simctl list devices booted
+            
+            # Verificar procesos del simulador
+            echo ""
+            echo "Procesos del simulador:"
+            ps aux | grep -i simulator | grep -v grep | head -5 || echo "Ningún proceso visible"
+            
+            echo ""
+            echo "✅ Simulador iniciado y listo para streaming remoto"
+          else
+            echo "⚠️ No se pudo encontrar un simulador de iPhone"
+          fi
+
+      # ============================================
       # 6. Configurar VNC (si se selecciona)
       # ============================================
       - name: 🖥️ Configurar VNC/Screen Sharing
@@ -379,6 +484,11 @@ jobs:
           echo "Configurando VNC/Screen Sharing..."
           
           PASSWORD="Runner123"
+          
+          # ═══════════════════════════════════════════════════════════════
+          # IMPORTANTE: GitHub Actions solo tiene GUI para 'runner'
+          # VNC mostrará el escritorio de 'runner', no de 'macuser'
+          # ═══════════════════════════════════════════════════════════════
           
           # Habilitar Screen Sharing (VNC) con configuración completa
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
@@ -391,12 +501,86 @@ jobs:
           sudo defaults write /var/db/launchd.db/com.apple.launchd/overrides.plist com.apple.screensharing -dict Disabled -bool false 2>/dev/null || true
           sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null || true
           
+          # Asegurar que el display está activo (evita pantalla negra)
+          echo "Activando display..."
+          caffeinate -u -t 5 &
+          
+          # Iniciar Finder y Dock para que haya un escritorio visible
+          echo "Iniciando entorno de escritorio..."
+          open -a Finder
+          sleep 2
+          
+          # Abrir una ventana de Terminal para que se vea algo
+          osascript -e 'tell application "Terminal" to activate' 2>/dev/null || true
+          
+          # Desactivar el protector de pantalla y sleep
+          sudo pmset -a displaysleep 0
+          sudo pmset -a sleep 0
+          defaults write com.apple.screensaver askForPassword 0
+          
+          echo ""
+          echo "╔════════════════════════════════════════════════════════════════╗"
+          echo "║  VNC CONFIGURADO - CONECTA AL ESCRITORIO DE 'runner'           ║"
+          echo "╠════════════════════════════════════════════════════════════════╣"
+          echo "║  El VNC muestra el escritorio del usuario 'runner'             ║"
+          echo "║  que es el único con sesión GUI real en GitHub Actions.        ║"
+          echo "║                                                                 ║"
+          echo "║  Desde el escritorio VNC puedes:                               ║"
+          echo "║  - Abrir Terminal y cambiar a macuser: su - macuser            ║"
+          echo "║  - Ejecutar el Simulador: open -a Simulator                    ║"
+          echo "╚════════════════════════════════════════════════════════════════╝"
+          echo ""
           echo "✅ VNC/Screen Sharing habilitado"
           echo "🖥️ Puerto VNC: 5900"
           echo "🔑 Contraseña VNC: $PASSWORD"
+          echo "👤 Usuario del escritorio: runner"
 
       # ============================================
-      # 6.1 Sesión interactiva con tmate (más confiable)
+      # 6.1 Mantener Display Activo (evitar pantalla negra)
+      # ============================================
+      - name: 🖥️ Mantener Display Activo
+        if: ${{ github.event.inputs.tunnel_type == 'ssh_and_vnc' }}
+        run: |
+          echo "Configurando display para evitar pantalla negra..."
+          
+          # Desactivar ahorro de energía completamente
+          sudo pmset -a displaysleep 0
+          sudo pmset -a sleep 0
+          sudo pmset -a disksleep 0
+          sudo pmset -a powernap 0
+          
+          # Mantener el display activo con caffeinate en background
+          nohup caffeinate -d -i -s -u &
+          echo "CAFFEINATE_PID=$!" >> $GITHUB_ENV
+          
+          # Desactivar protector de pantalla
+          defaults -currentHost write com.apple.screensaver idleTime 0
+          defaults write com.apple.screensaver askForPassword 0
+          
+          # Asegurar que hay actividad en el display
+          # Esto "despierta" el display
+          osascript -e 'tell application "System Events" to keystroke " "' 2>/dev/null || true
+          
+          # Abrir algunas apps para que el escritorio no esté vacío
+          open -a Finder
+          open -a Terminal
+          
+          # Crear un script que mantiene el mouse moviéndose
+          cat << 'KEEPALIVE' | tee /tmp/keep_display_alive.sh
+          #!/bin/bash
+          while true; do
+            # Simular actividad del mouse cada 60 segundos
+            osascript -e 'tell application "System Events" to key code 63' 2>/dev/null || true
+            sleep 60
+          done
+          KEEPALIVE
+          chmod +x /tmp/keep_display_alive.sh
+          nohup /tmp/keep_display_alive.sh &
+          
+          echo "✅ Display configurado para mantenerse activo"
+
+      # ============================================
+      # 6.2 Sesión interactiva con tmate (más confiable)
       # ============================================
       - name: 🔧 Configurar Sesión Interactiva con tmate
         if: ${{ github.event.inputs.create_gui_session == 'true' }}
@@ -593,6 +777,28 @@ jobs:
           echo "   • Depurar apps en dispositivos iOS conectados al Mac"
           echo ""
           echo "═══════════════════════════════════════════════════════════════════"
+          echo "      📱 SI EL SIMULADOR REMOTO NO CONECTA:"
+          echo "═══════════════════════════════════════════════════════════════════"
+          echo ""
+          echo "   El simulador remoto necesita una sesión GUI activa."
+          echo "   Sigue estos pasos:"
+          echo ""
+          echo "   1. Conecta VNC Viewer a localhost:5900"
+          echo "      (Contraseña: Runner123)"
+          echo ""
+          echo "   2. En el escritorio del Mac (via VNC), abre Terminal y ejecuta:"
+          echo "      open -a Simulator"
+          echo ""
+          echo "   3. Espera a que el simulador se abra completamente"
+          echo ""
+          echo "   4. Vuelve a Visual Studio e intenta conectar al simulador"
+          echo ""
+          echo "   💡 El simulador DEBE estar visible en el escritorio del Mac"
+          echo "      para que el streaming remoto funcione"
+          echo ""
+          echo "───────────────────────────────────────────────────────────────────"
+          echo ""
+          echo "═══════════════════════════════════════════════════════════════════"
           echo "      ⚠️ SI APARECE ERROR 'no user session' SIGUE ESTOS PASOS:"
           echo "═══════════════════════════════════════════════════════════════════"
           echo ""
@@ -621,6 +827,16 @@ jobs:
             echo "   cloudflared access tcp --hostname $VNC_TUNNEL_HOST --url localhost:5900"
             echo ""
             echo "🖥️  PASO 2: Conectar con cliente VNC a: localhost:5900"
+            echo "      Contraseña: Runner123"
+            echo ""
+            echo "   ╔════════════════════════════════════════════════════════════╗"
+            echo "   ║  ⚠️  IMPORTANTE: VNC muestra el escritorio de 'runner'     ║"
+            echo "   ║  El usuario 'macuser' NO tiene escritorio GUI propio.      ║"
+            echo "   ║                                                             ║"
+            echo "   ║  Desde VNC puedes abrir Terminal y:                        ║"
+            echo "   ║  - Cambiar a macuser: su - macuser (pass: Runner123)       ║"
+            echo "   ║  - Abrir Simulator: open -a Simulator                      ║"
+            echo "   ╚════════════════════════════════════════════════════════════╝"
             echo ""
           fi
           echo "═══════════════════════════════════════════════════════════════════"
