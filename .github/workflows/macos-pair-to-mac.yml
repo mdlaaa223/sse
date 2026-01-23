@@ -37,13 +37,21 @@ on:
   workflow_dispatch:
     inputs:
       tunnel_type:
-        description: 'Tipo de túnel (VNC recomendado para crear sesión GUI)'
+        description: 'Tipo de túnel'
         required: true
         default: 'ssh_and_vnc'
         type: choice
         options:
-          - ssh_and_vnc
           - ssh
+          - ssh_and_vnc
+      create_gui_session:
+        description: 'Crear sesión GUI con tmate (más confiable)'
+        required: true
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
 
 env:
   DOTNET_VERSION: '10.0.x'
@@ -93,20 +101,27 @@ jobs:
           echo $HOME
 
       # ============================================
-      # 3. Seleccionar Xcode 26.2 (tiene simuladores)
+      # 3. Seleccionar Xcode 26.1 (compatible con .NET iOS SDK)
       # ============================================
-      - name: 🔧 Configurar Xcode 26.2
+      - name: 🔧 Configurar Xcode 26.1
         run: |
           echo "Buscando versiones de Xcode disponibles..."
           ls -la /Applications/ | grep Xcode
           
-          # Usar Xcode 26.2 porque tiene los simuladores
-          if [ -d "/Applications/Xcode_26.2.app" ]; then
-            sudo xcode-select -s /Applications/Xcode_26.2.app/Contents/Developer
-            echo "✅ Xcode 26.2 seleccionado"
-          elif [ -d "/Applications/Xcode_26.2.0.app" ]; then
-            sudo xcode-select -s /Applications/Xcode_26.2.0.app/Contents/Developer
-            echo "✅ Xcode 26.2.0 seleccionado"
+          # Buscar Xcode 26.1 (requerido por .NET for iOS 26.1.x)
+          if [ -d "/Applications/Xcode_26.1.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_26.1.app/Contents/Developer
+            echo "✅ Xcode 26.1 seleccionado"
+          elif [ -d "/Applications/Xcode_26.1.0.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_26.1.0.app/Contents/Developer
+            echo "✅ Xcode 26.1.0 seleccionado"
+          elif [ -d "/Applications/Xcode_26.0.1.app" ]; then
+            # Fallback a 26.0.1 si 26.1 no está disponible
+            sudo xcode-select -s /Applications/Xcode_26.0.1.app/Contents/Developer
+            echo "⚠️ Xcode 26.0.1 seleccionado (26.1 no disponible)"
+          elif [ -d "/Applications/Xcode_26.0.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_26.0.app/Contents/Developer
+            echo "⚠️ Xcode 26.0 seleccionado"
           else
             echo "⚠️ Usando Xcode por defecto"
           fi
@@ -117,40 +132,17 @@ jobs:
           echo ""
           echo "iOS SDKs disponibles:"
           xcodebuild -showsdks | grep -i ios
-          echo ""
-          echo "Simuladores disponibles:"
-          xcrun simctl list devices available | head -20
 
       # ============================================
-      # 4. Instalar .NET MAUI workloads (compatible con Xcode 26.2)
+      # 4. Instalar .NET MAUI workloads
       # ============================================
       - name: 📦 Instalar .NET MAUI Workloads
         run: |
-          echo "Instalando workloads de MAUI con soporte para Xcode 26.2..."
-          
-          # Primero, limpiar workloads anteriores que puedan causar conflictos
-          dotnet workload repair || true
-          
-          # Instalar workloads de MAUI
-          dotnet workload install maui --skip-manifest-update
-          
-          # Instalar específicamente el workload de iOS más reciente
-          # que soporte Xcode 26.2
-          echo ""
-          echo "Instalando SDK de iOS compatible con Xcode 26.2..."
-          dotnet workload install ios --skip-manifest-update || true
-          dotnet workload install maccatalyst --skip-manifest-update || true
-          
-          # Verificar versiones instaladas
+          echo "Instalando workloads de MAUI..."
+          dotnet workload install maui
           echo ""
           echo "✅ Workloads instalados:"
           dotnet workload list
-          
-          # Mostrar información del SDK de iOS
-          echo ""
-          echo "Versiones de SDK disponibles:"
-          ls -la /usr/local/share/dotnet/packs/ | grep -i ios || true
-          ls -la ~/.dotnet/packs/ | grep -i ios || true
 
       # ============================================
       # 5. Configurar SSH para conexión remota
@@ -379,122 +371,65 @@ jobs:
           echo "╚════════════════════════════════════════════════════════════════╝"
 
       # ============================================
-      # 6. Configurar VNC (IMPORTANTE: Crea la sesión GUI para Pair to Mac)
+      # 6. Configurar VNC (si se selecciona)
       # ============================================
-      - name: 🖥️ Configurar VNC/Screen Sharing (CREA SESIÓN GUI)
+      - name: 🖥️ Configurar VNC/Screen Sharing
         if: ${{ github.event.inputs.tunnel_type == 'ssh_and_vnc' }}
         run: |
-          echo "╔══════════════════════════════════════════════════════════════════╗"
-          echo "║  CONFIGURANDO VNC - ESTO CREA LA SESIÓN GUI PARA PAIR TO MAC    ║"
-          echo "╚══════════════════════════════════════════════════════════════════╝"
-          echo ""
+          echo "Configurando VNC/Screen Sharing..."
           
           PASSWORD="Runner123"
-          
-          # Detener cualquier proceso ARD existente
-          sudo killall ARDAgent 2>/dev/null || true
-          sleep 2
-          
-          # Configurar VNC para macuser Y runner
-          echo "Configurando VNC para usuarios macuser y runner..."
           
           # Habilitar Screen Sharing (VNC) con configuración completa
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
             -activate -configure -access -on \
-            -configure -allowAccessFor -allUsers \
-            -configure -users macuser,runner \
-            -configure -restart -agent \
             -clientopts -setvnclegacy -vnclegacy yes \
             -clientopts -setvncpw -vncpw "$PASSWORD" \
-            -privs -all
+            -restart -agent -privs -all
           
           # Configurar Screen Sharing directamente
           sudo defaults write /var/db/launchd.db/com.apple.launchd/overrides.plist com.apple.screensharing -dict Disabled -bool false 2>/dev/null || true
           sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null || true
           
-          # Habilitar login gráfico automático para macuser
-          sudo defaults write /Library/Preferences/com.apple.loginwindow autoLoginUser macuser
-          
-          # Configurar que VNC acepte conexiones sin autenticación adicional después del password
-          sudo defaults write /Library/Preferences/com.apple.RemoteManagement VNCAlwaysStartOnConsole -bool true 2>/dev/null || true
-          
-          # Reiniciar el agente ARD
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -restart -agent
-          
-          # Verificar que VNC está escuchando
-          sleep 3
-          if sudo lsof -i :5900 | grep -q LISTEN; then
-            echo "✅ VNC está escuchando en puerto 5900"
-          else
-            echo "⚠️ Intentando iniciar VNC nuevamente..."
-            sudo launchctl start com.apple.screensharing || true
-            sleep 2
-          fi
-          
-          echo ""
           echo "✅ VNC/Screen Sharing habilitado"
           echo "🖥️ Puerto VNC: 5900"
           echo "🔑 Contraseña VNC: $PASSWORD"
 
       # ============================================
-      # 6.1 Crear script de sesión para macuser
+      # 6.1 Sesión interactiva con tmate (más confiable)
       # ============================================
-      - name: 📝 Crear Script de Sesión para macuser
+      - name: 🔧 Configurar Sesión Interactiva con tmate
+        if: ${{ github.event.inputs.create_gui_session == 'true' }}
         run: |
-          PASSWORD="Runner123"
+          echo "Instalando tmate para sesión interactiva..."
+          brew install tmate
           
-          # Crear script para login de macuser (sin pedir contraseña)
+          # Crear script para login de macuser
           cat << 'LOGINSCRIPT' | sudo tee /tmp/login_macuser.sh
           #!/bin/bash
-          # Script para iniciar sesión como macuser SIN PEDIR CONTRASEÑA
+          # Script para iniciar sesión como macuser
           echo "==================================="
           echo "Iniciando sesión como macuser..."
           echo "==================================="
-          
-          # Usar sudo para cambiar a macuser sin contraseña
-          sudo -u macuser bash -c '
+          su - macuser -c "
             export HOME=/Users/macuser
-            export USER=macuser
             cd ~
-            
-            # Crear marcador de sesión para XMA (Xamarin Mac Agent)
+            # Crear marcador de sesión para XMA
             mkdir -p ~/Library/Application\ Support/Xamarin
             touch ~/Library/Application\ Support/Xamarin/.session
-            
-            # Crear otros directorios que XMA puede necesitar
-            mkdir -p ~/Library/Caches/Xamarin
-            mkdir -p ~/Library/Logs/Xamarin
-            
-            echo "✅ Sesión de macuser iniciada"
-            echo "📍 Directorio: $(pwd)"
-            echo "👤 Usuario: $(whoami)"
-            echo ""
-            echo "Esta sesión se mantendrá activa."
-            echo "NO CIERRES ESTA VENTANA mientras uses Pair to Mac."
-            echo ""
-            
-            # Mantener sesión activa indefinidamente
-            while true; do
-              sleep 30
-              echo "⏱️ $(date) - Sesión activa..."
-            done
-          '
+            echo 'Sesión de macuser iniciada'
+            # Mantener sesión activa
+            exec bash
+          "
           LOGINSCRIPT
           sudo chmod +x /tmp/login_macuser.sh
           
-          # También crear directorios de Xamarin para runner
-          mkdir -p ~/Library/Application\ Support/Xamarin
-          touch ~/Library/Application\ Support/Xamarin/.session
-          mkdir -p ~/Library/Caches/Xamarin
-          mkdir -p ~/Library/Logs/Xamarin
-          
-          # Y para macuser directamente
-          sudo -u macuser mkdir -p /Users/macuser/Library/Application\ Support/Xamarin
-          sudo -u macuser touch /Users/macuser/Library/Application\ Support/Xamarin/.session
-          sudo -u macuser mkdir -p /Users/macuser/Library/Caches/Xamarin
-          sudo -u macuser mkdir -p /Users/macuser/Library/Logs/Xamarin
-          
-          echo "✅ Script de sesión creado: /tmp/login_macuser.sh"
+          echo ""
+          echo "╔══════════════════════════════════════════════════════════════════╗"
+          echo "║  SESIÓN TMATE DISPONIBLE                                         ║"
+          echo "║  Usa esta sesión para hacer login manual como macuser            ║"
+          echo "║  y luego probar Pair to Mac desde Visual Studio                  ║"
+          echo "╚══════════════════════════════════════════════════════════════════╝"
 
       # ============================================
       # 7. Instalar Cloudflare Tunnel
@@ -609,98 +544,70 @@ jobs:
           fi
           echo "═══════════════════════════════════════════════════════════════════"
           echo "           PASOS PARA CONECTAR DESDE WINDOWS"
-          echo "           ⭐ FLUJO PROBADO QUE FUNCIONA ⭐"
           echo "═══════════════════════════════════════════════════════════════════"
           echo ""
-          echo "📥 REQUISITOS: Instalar en Windows"
+          echo "📥 PASO 1: Instalar cloudflared en tu Windows"
+          echo "   Abre PowerShell como Administrador y ejecuta:"
           echo ""
           echo "   winget install Cloudflare.cloudflared"
-          echo "   VNC Viewer: https://www.realvnc.com/en/connect/download/viewer/"
           echo ""
-          echo "═══════════════════════════════════════════════════════════════════"
-          echo "           🔄 FLUJO QUE FUNCIONA (seguir en orden)"
-          echo "═══════════════════════════════════════════════════════════════════"
+          echo "   O descarga manualmente de:"
+          echo "   https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/installation/"
           echo ""
-          echo "📋 PASO 1: Iniciar túnel SSH (PowerShell #1)"
+          echo "───────────────────────────────────────────────────────────────────"
+          echo ""
+          echo "🔌 PASO 2: Crear túnel local (PowerShell)"
+          echo "   Ejecuta este comando para crear el túnel:"
           echo ""
           echo "   cloudflared access tcp --hostname $SSH_TUNNEL_HOST --url localhost:2222"
           echo ""
-          echo "───────────────────────────────────────────────────────────────────"
-          echo ""
-          echo "📋 PASO 2: Conectar SSH y ejecutar script (PowerShell #2)"
-          echo ""
-          echo "   ssh -p 2222 macuser@localhost"
-          echo "   Contraseña: Runner123"
-          echo ""
-          echo "   Dentro del Mac ejecutar:"
-          echo "   /tmp/login_macuser.sh"
-          echo ""
-          echo "   ⚠️ Mantén esta ventana abierta (no importa si se cierra después)"
+          echo "   ⚠️  Mantén esta ventana abierta mientras uses el Mac"
           echo ""
           echo "───────────────────────────────────────────────────────────────────"
           echo ""
-          if [ "${{ github.event.inputs.tunnel_type }}" == "ssh_and_vnc" ]; then
-            echo "📋 PASO 3: Iniciar túnel VNC (PowerShell #3)"
-            echo ""
-            echo "   cloudflared access tcp --hostname $VNC_TUNNEL_HOST --url localhost:5900"
-            echo ""
-            echo "───────────────────────────────────────────────────────────────────"
-            echo ""
-            echo "📋 PASO 4: Conectar VNC Viewer"
-            echo ""
-            echo "   • Abrir VNC Viewer → localhost:5900"
-            echo "   • Contraseña: Runner123"
-            echo "   • Usuario (si pide): macuser"
-            echo ""
-            echo "   ⚠️ Es posible que los túneles se cierren - ES NORMAL"
-            echo ""
-            echo "───────────────────────────────────────────────────────────────────"
-            echo ""
-            echo "📋 PASO 5: ⭐ RECONECTAR TÚNELES (IMPORTANTE)"
-            echo ""
-            echo "   Si los túneles se cerraron, volver a ejecutar:"
-            echo ""
-            echo "   PowerShell #1 (SSH):"
-            echo "   cloudflared access tcp --hostname $SSH_TUNNEL_HOST --url localhost:2222"
-            echo ""
-            echo "   PowerShell #2 (VNC):"
-            echo "   cloudflared access tcp --hostname $VNC_TUNNEL_HOST --url localhost:5900"
-            echo ""
-            echo "   ⭐ DESPUÉS de reconectar, Pair to Mac funcionará"
-            echo ""
-            echo "───────────────────────────────────────────────────────────────────"
-            echo ""
-          fi
-          echo "📋 PASO 6: Configurar Visual Studio Pair to Mac"
+          echo "🔧 PASO 3: Configurar Visual Studio"
           echo ""
-          echo "   Tools > Options > Xamarin > iOS Settings > Pair to Mac"
+          echo "   A) Ve a: Tools > Options > Xamarin > iOS Settings"
           echo ""
-          echo "   • Host:     localhost"
-          echo "   • Port:     2222"
-          echo "   • Username: macuser"
-          echo "   • Password: Runner123"
+          echo "   B) En 'Pair to Mac', configura:"
+          echo "      • Host:     localhost"
+          echo "      • Port:     2222"
+          echo ""
+          echo "   C) Haz clic en 'Pair' e ingresa:"
+          echo "      ┌─────────────────────────────────────────────┐"
+          echo "      │  👉 PRUEBA PRIMERO CON:                     │"
+          echo "      │     Username: runner                        │"
+          echo "      │     Password: Runner123                     │"
+          echo "      │                                             │"
+          echo "      │  Si no funciona, intenta con:               │"
+          echo "      │     Username: macuser                       │"
+          echo "      │     Password: Runner123                     │"
+          echo "      └─────────────────────────────────────────────┘"
           echo ""
           echo "───────────────────────────────────────────────────────────────────"
           echo ""
-          echo "✅ PASO 7: ¡Listo!"
+          echo "✅ PASO 4: ¡Listo!"
           echo "   Una vez emparejado, podrás:"
           echo "   • Compilar proyectos iOS desde Visual Studio"
           echo "   • Usar el simulador de iOS remoto"
           echo "   • Depurar apps en dispositivos iOS conectados al Mac"
           echo ""
           echo "═══════════════════════════════════════════════════════════════════"
-          echo "      ⚠️ SI APARECE ERROR 'no user session':"
+          echo "      ⚠️ SI APARECE ERROR 'no user session' SIGUE ESTOS PASOS:"
           echo "═══════════════════════════════════════════════════════════════════"
           echo ""
-          echo "   La clave es: RECONECTAR los túneles después de VNC"
+          echo "   1. Abre OTRA ventana de PowerShell"
           echo ""
-          echo "   1. Conecta SSH → ejecuta /tmp/login_macuser.sh"
-          echo "   2. Conecta VNC Viewer (los túneles pueden cerrarse)"
-          echo "   3. ⭐ RECONECTA los túneles SSH y VNC"
-          echo "   4. Intenta Pair to Mac de nuevo"
+          echo "   2. Conéctate por SSH:"
+          echo "      ssh -p 2222 macuser@localhost"
+          echo "      (Contraseña: Runner123)"
           echo ""
-          echo "   💡 El secreto está en reconectar después de que VNC"
-          echo "      haya creado la sesión gráfica"
+          echo "   3. Una vez dentro del Mac, ejecuta:"
+          echo "      /tmp/login_macuser.sh"
+          echo ""
+          echo "   4. MANTÉN ESA SESIÓN SSH ABIERTA"
+          echo ""
+          echo "   5. Ahora vuelve a Visual Studio y haz Retry en Pair to Mac"
           echo ""
           echo "───────────────────────────────────────────────────────────────────"
           echo ""
