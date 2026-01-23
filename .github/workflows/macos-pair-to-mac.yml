@@ -124,32 +124,53 @@ jobs:
       # 5. Configurar SSH para conexión remota
       # ============================================
       - name: 🔐 Configurar SSH y Acceso Remoto
-        env:
-          MAC_PASSWORD: ${{ secrets.MAC_PASSWORD }}
+        id: ssh_config
         run: |
           echo "Configurando SSH..."
           
-          # Establecer contraseña para el usuario runner
-          PASSWORD="${MAC_PASSWORD:-Runner123!}"
-          echo -e "$PASSWORD\n$PASSWORD" | sudo passwd runner
+          # Contraseña fija para facilitar la conexión
+          PASSWORD="Runner123"
+          
+          # Establecer contraseña para el usuario runner usando dscl (más confiable en macOS)
+          sudo dscl . -passwd /Users/runner "$PASSWORD"
           
           # Habilitar login remoto (SSH)
           sudo systemsetup -setremotelogin on
           
           # Configurar SSH para permitir autenticación por contraseña
           sudo sed -i '' 's/^#PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
-          sudo sed -i '' 's/^PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
-          sudo sed -i '' 's/^#ChallengeResponseAuthentication.*/ChallengeResponseAuthentication yes/' /etc/ssh/sshd_config
-          sudo sed -i '' 's/^ChallengeResponseAuthentication.*/ChallengeResponseAuthentication yes/' /etc/ssh/sshd_config
+          sudo sed -i '' 's/^PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo sed -i '' 's/^#KbdInteractiveAuthentication.*/KbdInteractiveAuthentication yes/' /etc/ssh/sshd_config
+          sudo sed -i '' 's/^KbdInteractiveAuthentication no/KbdInteractiveAuthentication yes/' /etc/ssh/sshd_config
+          
+          # Agregar configuraciones si no existen
+          echo "PasswordAuthentication yes" | sudo tee -a /etc/ssh/sshd_config
+          echo "KbdInteractiveAuthentication yes" | sudo tee -a /etc/ssh/sshd_config
           
           # Reiniciar servicio SSH
           sudo launchctl unload /System/Library/LaunchDaemons/ssh.plist 2>/dev/null || true
           sudo launchctl load -w /System/Library/LaunchDaemons/ssh.plist
           
-          echo "✅ SSH configurado correctamente"
+          # Verificar que SSH está funcionando
+          sleep 2
+          if sudo lsof -i :22 | grep -q LISTEN; then
+            echo "✅ SSH está escuchando en puerto 22"
+          else
+            echo "⚠️ SSH puede no estar funcionando correctamente"
+          fi
+          
           echo ""
-          echo "👤 Usuario SSH: runner"
-          echo "🔑 Contraseña: (la configurada en secrets.MAC_PASSWORD o 'Runner123!')"
+          echo "════════════════════════════════════════════"
+          echo "  CREDENCIALES DE ACCESO"
+          echo "════════════════════════════════════════════"
+          echo "  👤 Usuario:     runner"
+          echo "  🔑 Contraseña:  $PASSWORD"
+          echo "════════════════════════════════════════════"
+          echo ""
+          
+          # Guardar para usar después
+          echo "MAC_USER=runner" >> $GITHUB_ENV
+          echo "MAC_PASS=$PASSWORD" >> $GITHUB_ENV
 
       # ============================================
       # 6. Configurar VNC (si se selecciona)
@@ -269,7 +290,7 @@ jobs:
           echo ""
           echo "🔗 Túnel SSH:     $SSH_TUNNEL_URL"
           echo "👤 Usuario:       runner"
-          echo "🔑 Contraseña:    ${MAC_PASSWORD:-Runner123!}"
+          echo "🔑 Contraseña:    Runner123"
           echo "⏱️  Duración:      Hasta que canceles el workflow manualmente"
           echo ""
           if [ "${{ github.event.inputs.tunnel_type }}" == "ssh_and_vnc" ]; then
@@ -309,7 +330,7 @@ jobs:
           echo ""
           echo "   C) Haz clic en 'Pair' e ingresa:"
           echo "      • Username: runner"
-          echo "      • Password: ${MAC_PASSWORD:-Runner123!}"
+          echo "      • Password: Runner123"
           echo ""
           echo "───────────────────────────────────────────────────────────────────"
           echo ""
