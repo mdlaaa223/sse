@@ -132,14 +132,16 @@ jobs:
           PASSWORD="Runner123"
           
           # Crear un nuevo usuario para SSH (más confiable que modificar runner)
-          # Primero verificamos si ya existe
           if ! id "macuser" &>/dev/null; then
             echo "Creando usuario 'macuser' para SSH..."
             sudo sysadminctl -addUser macuser -password "$PASSWORD" -admin
           else
-            echo "Usuario macuser ya existe, actualizando contraseña..."
-            sudo sysadminctl -resetPasswordFor macuser -newPassword "$PASSWORD" -adminUser runner -adminPassword ""  2>/dev/null || true
+            echo "Usuario macuser ya existe"
           fi
+          
+          # Dar permisos de administrador al usuario
+          sudo dseditgroup -o edit -a macuser -t user admin
+          sudo dseditgroup -o edit -a macuser -t user wheel
           
           # Habilitar login remoto (SSH)
           sudo systemsetup -setremotelogin on
@@ -187,6 +189,97 @@ jobs:
           # Guardar para usar después
           echo "MAC_USER=macuser" >> $GITHUB_ENV
           echo "MAC_PASS=$PASSWORD" >> $GITHUB_ENV
+
+      # ============================================
+      # 5.1 Crear sesión de usuario (requerido para Pair to Mac)
+      # ============================================
+      - name: 👤 Crear Sesión de Usuario para Pair to Mac
+        run: |
+          echo "Creando sesión de usuario para Visual Studio Pair to Mac..."
+          
+          PASSWORD="Runner123"
+          
+          # ═══════════════════════════════════════════════════════════════
+          # IMPORTANTE: El usuario 'runner' YA tiene sesión activa
+          # Configuramos TAMBIÉN al usuario runner para Pair to Mac
+          # ═══════════════════════════════════════════════════════════════
+          
+          # Configurar contraseña para el usuario 'runner' (ya tiene sesión)
+          echo "Configurando usuario 'runner' (tiene sesión GUI activa)..."
+          echo "$PASSWORD" | sudo -S dscl . -passwd /Users/runner "$PASSWORD" 2>/dev/null || {
+            # Si falla, intentar con otro método
+            sudo security set-keychain-password -o "" -p "$PASSWORD" /Users/runner/Library/Keychains/login.keychain-db 2>/dev/null || true
+          }
+          
+          # Obtener el UID del usuario macuser
+          MACUSER_UID=$(id -u macuser)
+          echo "UID de macuser: $MACUSER_UID"
+          
+          # Método 1: Configurar auto-login (simula sesión activa)
+          sudo defaults write /Library/Preferences/com.apple.loginwindow autoLoginUser macuser 2>/dev/null || true
+          
+          # Método 2: Iniciar un agente de usuario para macuser
+          sudo launchctl bootstrap gui/$MACUSER_UID 2>/dev/null || true
+          
+          # Método 3: Crear el directorio de sesión del usuario
+          sudo mkdir -p /Users/macuser/Library/LaunchAgents
+          sudo chown -R macuser:staff /Users/macuser
+          
+          # Método 4: Iniciar loginwindow para el usuario (crea sesión GUI)
+          sudo launchctl asuser $MACUSER_UID /System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow 2>/dev/null &
+          sleep 2
+          
+          # Método 5: Habilitar escritorio remoto / acceso GUI
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+            -activate -configure -access -on \
+            -users macuser,runner \
+            -privs -all \
+            -restart -agent 2>/dev/null || true
+          
+          # Método 6: Iniciar WindowServer connection para el usuario
+          sudo launchctl asuser $MACUSER_UID launchctl start com.apple.WindowServer 2>/dev/null || true
+          
+          # Método 7: Crear un launchd plist para mantener sesión activa
+          cat << 'PLIST' | sudo tee /Library/LaunchDaemons/com.github.pairsession.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>Label</key>
+              <string>com.github.pairsession</string>
+              <key>ProgramArguments</key>
+              <array>
+                  <string>/bin/bash</string>
+                  <string>-c</string>
+                  <string>launchctl asuser $(id -u macuser) true</string>
+              </array>
+              <key>RunAtLoad</key>
+              <true/>
+              <key>KeepAlive</key>
+              <true/>
+          </dict>
+          </plist>
+          PLIST
+          sudo launchctl load /Library/LaunchDaemons/com.github.pairsession.plist 2>/dev/null || true
+          
+          # Verificar sesiones activas
+          echo ""
+          echo "Sesiones activas:"
+          who -a 2>/dev/null || true
+          
+          echo ""
+          echo "Usuarios disponibles:"
+          echo "  - runner (sesión GUI activa por defecto)"
+          echo "  - macuser (sesión creada)"
+          
+          echo ""
+          echo "✅ Sesión de usuario configurada"
+          echo ""
+          echo "════════════════════════════════════════════════════════════════"
+          echo "  💡 TIP: Si 'macuser' no funciona, intenta con 'runner'"
+          echo "     Usuario: runner"
+          echo "     Contraseña: $PASSWORD"
+          echo "════════════════════════════════════════════════════════════════"
 
       # ============================================
       # 6. Configurar VNC (si se selecciona)
@@ -305,8 +398,19 @@ jobs:
           echo "═══════════════════════════════════════════════════════════════════"
           echo ""
           echo "🔗 Túnel SSH:     $SSH_TUNNEL_URL"
-          echo "👤 Usuario:       macuser"
-          echo "🔑 Contraseña:    Runner123"
+          echo ""
+          echo "╔════════════════════════════════════════════════════════════════╗"
+          echo "║  USUARIOS DISPONIBLES (prueba en este orden):                   ║"
+          echo "╠════════════════════════════════════════════════════════════════╣"
+          echo "║  👤 Opción 1 (RECOMENDADO - tiene sesión activa):              ║"
+          echo "║     Usuario:    runner                                          ║"
+          echo "║     Contraseña: Runner123                                       ║"
+          echo "║                                                                  ║"
+          echo "║  👤 Opción 2 (alternativa):                                     ║"
+          echo "║     Usuario:    macuser                                         ║"
+          echo "║     Contraseña: Runner123                                       ║"
+          echo "╚════════════════════════════════════════════════════════════════╝"
+          echo ""
           echo "⏱️  Duración:      Hasta que canceles el workflow manualmente"
           echo ""
           if [ "${{ github.event.inputs.tunnel_type }}" == "ssh_and_vnc" ]; then
@@ -345,8 +449,15 @@ jobs:
           echo "      • Port:     2222"
           echo ""
           echo "   C) Haz clic en 'Pair' e ingresa:"
-          echo "      • Username: macuser"
-          echo "      • Password: Runner123"
+          echo "      ┌─────────────────────────────────────────────┐"
+          echo "      │  👉 PRUEBA PRIMERO CON:                     │"
+          echo "      │     Username: runner                        │"
+          echo "      │     Password: Runner123                     │"
+          echo "      │                                             │"
+          echo "      │  Si no funciona, intenta con:               │"
+          echo "      │     Username: macuser                       │"
+          echo "      │     Password: Runner123                     │"
+          echo "      └─────────────────────────────────────────────┘"
           echo ""
           echo "───────────────────────────────────────────────────────────────────"
           echo ""
@@ -374,7 +485,7 @@ jobs:
           echo ""
           echo "   Si prefieres SSH directo desde PowerShell:"
           echo ""
-          echo "   ssh -o ProxyCommand=\"cloudflared access tcp --hostname $SSH_TUNNEL_HOST\" macuser@$SSH_TUNNEL_HOST"
+          echo "   ssh -o ProxyCommand=\"cloudflared access tcp --hostname $SSH_TUNNEL_HOST\" runner@$SSH_TUNNEL_HOST"
           echo ""
           echo "═══════════════════════════════════════════════════════════════════"
           echo ""
