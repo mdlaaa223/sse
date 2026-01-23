@@ -101,26 +101,63 @@ jobs:
           echo $HOME
 
       # ============================================
-      # 3. Seleccionar Xcode 26.2 (tiene simuladores)
+      # 3. Seleccionar Xcode con simuladores iOS
       # ============================================
-      - name: 🔧 Configurar Xcode 26.2
+      - name: 🔧 Configurar Xcode con Simuladores iOS
         run: |
           echo "Buscando versiones de Xcode disponibles..."
           ls -la /Applications/ | grep Xcode
           
-          # Usar Xcode 26.2 porque tiene los simuladores
-          if [ -d "/Applications/Xcode_26.2.app" ]; then
-            sudo xcode-select -s /Applications/Xcode_26.2.app/Contents/Developer
-            echo "✅ Xcode 26.2 seleccionado"
-          elif [ -d "/Applications/Xcode_26.2.0.app" ]; then
-            sudo xcode-select -s /Applications/Xcode_26.2.0.app/Contents/Developer
-            echo "✅ Xcode 26.2.0 seleccionado"
-          elif [ -d "/Applications/Xcode_26.1.app" ]; then
-            # Fallback a 26.1 si 26.2 no está disponible
-            sudo xcode-select -s /Applications/Xcode_26.1.app/Contents/Developer
-            echo "⚠️ Xcode 26.1 seleccionado (26.2 no disponible)"
-          else
-            echo "⚠️ Usando Xcode por defecto"
+          # Función para verificar si Xcode tiene simuladores iOS
+          check_ios_sims() {
+            local xcode_path=$1
+            if [ -d "$xcode_path" ]; then
+              sudo xcode-select -s "$xcode_path/Contents/Developer"
+              if xcrun simctl list devices available 2>/dev/null | grep -qi "iPhone"; then
+                return 0
+              fi
+            fi
+            return 1
+          }
+          
+          # Buscar Xcode con simuladores iOS (probar varias versiones)
+          XCODE_FOUND=false
+          for xcode in /Applications/Xcode_26.0.app /Applications/Xcode_26.1.app /Applications/Xcode_26.2.app /Applications/Xcode.app; do
+            if check_ios_sims "$xcode"; then
+              echo "✅ $xcode tiene simuladores iOS"
+              XCODE_FOUND=true
+              break
+            else
+              echo "❌ $xcode no tiene simuladores iOS o no existe"
+            fi
+          done
+          
+          # Si ninguno tiene simuladores iOS, usar Xcode 26.2 e instalar runtime
+          if [ "$XCODE_FOUND" = false ]; then
+            echo ""
+            echo "⚠️ Ningún Xcode tiene simuladores iOS preinstalados"
+            echo "Seleccionando Xcode 26.2 y descargando iOS runtime..."
+            
+            if [ -d "/Applications/Xcode_26.2.app" ]; then
+              sudo xcode-select -s /Applications/Xcode_26.2.app/Contents/Developer
+            elif [ -d "/Applications/Xcode_26.1.app" ]; then
+              sudo xcode-select -s /Applications/Xcode_26.1.app/Contents/Developer
+            elif [ -d "/Applications/Xcode.app" ]; then
+              sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+            fi
+            
+            # Listar runtimes disponibles para descargar
+            echo ""
+            echo "Runtimes disponibles para descargar:"
+            xcrun simctl runtime list 2>/dev/null || true
+            
+            # Intentar descargar iOS runtime
+            echo ""
+            echo "Intentando descargar iOS 26 runtime (esto puede tardar)..."
+            xcrun simctl runtime add "iOS 26.0" 2>/dev/null || \
+            xcrun simctl runtime add "com.apple.CoreSimulator.SimRuntime.iOS-26-0" 2>/dev/null || \
+            xcodebuild -downloadPlatform iOS 2>/dev/null || \
+            echo "No se pudo descargar automáticamente. Continuando sin simulador iOS."
           fi
           
           echo ""
@@ -128,10 +165,13 @@ jobs:
           xcodebuild -version
           echo ""
           echo "iOS SDKs disponibles:"
-          xcodebuild -showsdks | grep -i ios
+          xcodebuild -showsdks | grep -i ios || echo "No hay iOS SDKs"
           echo ""
-          echo "Simuladores disponibles:"
-          xcrun simctl list devices available | head -20
+          echo "Simuladores iOS disponibles:"
+          xcrun simctl list devices available | grep -i iphone || echo "No hay simuladores iPhone"
+          echo ""
+          echo "Todos los simuladores:"
+          xcrun simctl list devices available | head -30
 
       # ============================================
       # 4. Instalar .NET MAUI workloads
@@ -148,6 +188,7 @@ jobs:
       # 4.1 Preparar Simulador de iOS (IMPORTANTE para VS remoto)
       # ============================================
       - name: 📱 Preparar Simulador de iOS
+        continue-on-error: true
         run: |
           echo "╔══════════════════════════════════════════════════════════════════╗"
           echo "║  PREPARANDO SIMULADOR DE iOS PARA VISUAL STUDIO REMOTO          ║"
@@ -159,12 +200,46 @@ jobs:
           xcrun simctl list devices available
           echo ""
           
+          # Buscar simuladores iPhone
+          echo "Buscando simuladores iPhone..."
+          IPHONE_SIMS=$(xcrun simctl list devices available | grep -i "iPhone" || echo "")
+          
+          if [ -z "$IPHONE_SIMS" ]; then
+            echo ""
+            echo "╔══════════════════════════════════════════════════════════════════╗"
+            echo "║  ⚠️  NO HAY SIMULADORES iPHONE DISPONIBLES                       ║"
+            echo "╠══════════════════════════════════════════════════════════════════╣"
+            echo "║  El runner de GitHub Actions no tiene iOS runtime instalado.    ║"
+            echo "║                                                                   ║"
+            echo "║  OPCIONES:                                                       ║"
+            echo "║  1. Conectar por VNC y descargar manualmente desde Xcode        ║"
+            echo "║     Xcode > Settings > Platforms > iOS > Download               ║"
+            echo "║                                                                   ║"
+            echo "║  2. Usar dispositivo físico conectado al Mac                    ║"
+            echo "║                                                                   ║"
+            echo "║  3. El Pair to Mac funcionará para compilación aunque           ║"
+            echo "║     el simulador remoto no esté disponible.                     ║"
+            echo "╚══════════════════════════════════════════════════════════════════╝"
+            echo ""
+            echo "Intentando descargar iOS platform..."
+            xcodebuild -downloadPlatform iOS 2>&1 || echo "Descarga no disponible o requiere Apple ID"
+            
+            # Guardar estado
+            echo "SIMULATOR_UDID=" >> $GITHUB_ENV
+            echo "IOS_SIMULATOR_AVAILABLE=false" >> $GITHUB_ENV
+            exit 0
+          fi
+          
+          echo "Simuladores iPhone encontrados:"
+          echo "$IPHONE_SIMS"
+          echo ""
+          
           # Obtener el UDID del primer iPhone disponible con iOS 26
-          SIMULATOR_UDID=$(xcrun simctl list devices available | grep -i "iPhone" | grep -i "26" | head -1 | grep -oE '[A-F0-9-]{36}')
+          SIMULATOR_UDID=$(echo "$IPHONE_SIMS" | grep -i "26" | head -1 | grep -oE '[A-F0-9-]{36}' || echo "")
           
           if [ -z "$SIMULATOR_UDID" ]; then
             # Si no hay iOS 26, buscar cualquier iPhone
-            SIMULATOR_UDID=$(xcrun simctl list devices available | grep -i "iPhone" | head -1 | grep -oE '[A-F0-9-]{36}')
+            SIMULATOR_UDID=$(echo "$IPHONE_SIMS" | head -1 | grep -oE '[A-F0-9-]{36}' || echo "")
           fi
           
           if [ -n "$SIMULATOR_UDID" ]; then
@@ -188,10 +263,10 @@ jobs:
             
             echo ""
             echo "✅ Simulador preparado: $SIMULATOR_UDID"
+            echo "IOS_SIMULATOR_AVAILABLE=true" >> $GITHUB_ENV
           else
-            echo "⚠️ No se encontró ningún simulador de iPhone"
-            echo "Listando todos los dispositivos:"
-            xcrun simctl list devices
+            echo "⚠️ No se pudo obtener UDID del simulador"
+            echo "IOS_SIMULATOR_AVAILABLE=false" >> $GITHUB_ENV
           fi
           
           # Guardar UDID para referencia
@@ -208,13 +283,67 @@ jobs:
           # Contraseña fija para facilitar la conexión
           PASSWORD="Runner123"
           
+          # ═══════════════════════════════════════════════════════════════
+          # CONFIGURAR CONTRASEÑA PARA 'runner' (usuario con GUI activa)
+          # ═══════════════════════════════════════════════════════════════
+          echo "Configurando contraseña para usuario 'runner'..."
+          
+          # Método 1: sysadminctl (más confiable en macOS modernos)
+          sudo sysadminctl -resetPasswordFor runner -newPassword "$PASSWORD" -passwordHint "pair" 2>/dev/null && \
+            echo "✅ Contraseña de 'runner' configurada con sysadminctl" || {
+            
+            # Método 2: dscl
+            echo "Intentando con dscl..."
+            sudo dscl . -passwd /Users/runner "$PASSWORD" 2>/dev/null && \
+              echo "✅ Contraseña de 'runner' configurada con dscl" || {
+              
+              # Método 3: passwd interactivo con expect
+              echo "Intentando con passwd..."
+              echo "$PASSWORD\n$PASSWORD" | sudo passwd runner 2>/dev/null && \
+                echo "✅ Contraseña de 'runner' configurada con passwd" || \
+                echo "⚠️ No se pudo configurar contraseña de runner"
+            }
+          }
+          
+          # Verificar que runner puede autenticarse
+          echo ""
+          echo "Verificando autenticación de 'runner'..."
+          if dscl . -authonly runner "$PASSWORD" 2>/dev/null; then
+            echo "✅ Usuario 'runner' puede autenticarse con contraseña '$PASSWORD'"
+            RUNNER_AUTH_OK=true
+          else
+            echo "⚠️ Usuario 'runner' NO puede autenticarse - usar 'macuser' en su lugar"
+            RUNNER_AUTH_OK=false
+          fi
+          
+          # ═══════════════════════════════════════════════════════════════
+          # CREAR USUARIO 'macuser' (alternativa confiable)
+          # ═══════════════════════════════════════════════════════════════
+          
           # Crear un nuevo usuario para SSH (más confiable que modificar runner)
           if ! id "macuser" &>/dev/null; then
             echo "Creando usuario 'macuser' para SSH..."
             sudo sysadminctl -addUser macuser -password "$PASSWORD" -admin
           else
             echo "Usuario macuser ya existe"
+            # Asegurar que la contraseña está configurada
+            sudo sysadminctl -resetPasswordFor macuser -newPassword "$PASSWORD" -passwordHint "pair" 2>/dev/null || true
           fi
+          
+          # Verificar autenticación de macuser
+          echo ""
+          echo "Verificando autenticación de 'macuser'..."
+          if dscl . -authonly macuser "$PASSWORD" 2>/dev/null; then
+            echo "✅ Usuario 'macuser' puede autenticarse con contraseña '$PASSWORD'"
+            MACUSER_AUTH_OK=true
+          else
+            echo "⚠️ Usuario 'macuser' NO puede autenticarse"
+            MACUSER_AUTH_OK=false
+          fi
+          
+          # Guardar estado de autenticación
+          echo "RUNNER_AUTH_OK=$RUNNER_AUTH_OK" >> $GITHUB_ENV
+          echo "MACUSER_AUTH_OK=$MACUSER_AUTH_OK" >> $GITHUB_ENV
           
           # Dar permisos de administrador al usuario
           sudo dseditgroup -o edit -a macuser -t user admin
@@ -709,15 +838,32 @@ jobs:
           echo "🔗 Túnel SSH:     $SSH_TUNNEL_URL"
           echo ""
           echo "╔════════════════════════════════════════════════════════════════╗"
-          echo "║  USUARIOS DISPONIBLES (prueba en este orden):                   ║"
+          echo "║  USUARIOS DISPONIBLES:                                           ║"
           echo "╠════════════════════════════════════════════════════════════════╣"
-          echo "║  👤 Opción 1 (RECOMENDADO - tiene sesión activa):              ║"
-          echo "║     Usuario:    runner                                          ║"
-          echo "║     Contraseña: Runner123                                       ║"
+          if [ "$RUNNER_AUTH_OK" = "true" ]; then
+            echo "║  ✅ runner    - Contraseña: Runner123 (VERIFICADA)              ║"
+          else
+            echo "║  ⚠️  runner    - Contraseña: Runner123 (NO VERIFICADA)           ║"
+          fi
+          if [ "$MACUSER_AUTH_OK" = "true" ]; then
+            echo "║  ✅ macuser   - Contraseña: Runner123 (VERIFICADA)              ║"
+          else
+            echo "║  ⚠️  macuser   - Contraseña: Runner123 (NO VERIFICADA)           ║"
+          fi
           echo "║                                                                  ║"
-          echo "║  👤 Opción 2 (alternativa):                                     ║"
-          echo "║     Usuario:    macuser                                         ║"
-          echo "║     Contraseña: Runner123                                       ║"
+          echo "║  💡 Usa el usuario con ✅ para Pair to Mac                      ║"
+          echo "╚════════════════════════════════════════════════════════════════╝"
+          echo ""
+          echo "╔════════════════════════════════════════════════════════════════╗"
+          if [ "$IOS_SIMULATOR_AVAILABLE" = "true" ]; then
+            echo "║  ✅ SIMULADOR iOS: DISPONIBLE                                   ║"
+            echo "║     UDID: $SIMULATOR_UDID"
+          else
+            echo "║  ⚠️  SIMULADOR iOS: NO DISPONIBLE                                ║"
+            echo "║     El runner no tiene iOS runtime instalado.                   ║"
+            echo "║     Puedes compilar pero no usar simulador remoto.              ║"
+            echo "║     Conéctate por VNC y descarga iOS desde Xcode > Platforms    ║"
+          fi
           echo "╚════════════════════════════════════════════════════════════════╝"
           echo ""
           echo "⏱️  Duración:      Hasta que canceles el workflow manualmente"
