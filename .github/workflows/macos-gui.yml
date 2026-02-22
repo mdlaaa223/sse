@@ -1,0 +1,343 @@
+name: "macOS Escritorio Remoto (GUI)"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  macos-gui:
+    runs-on: macos-latest
+    timeout-minutes: 360
+
+    env:
+      # Password VNC - EXACTAMENTE 8 caracteres (limitación DES de macOS VNC Legacy)
+      VNC_PASSWORD: mac2026A
+
+    steps:
+      # ─────────────────────────────────────────────────────
+      # 1. INFO DEL SISTEMA
+      # ─────────────────────────────────────────────────────
+      - name: "Información del Sistema"
+        run: |
+          echo "=== macOS $(sw_vers -productVersion) ($(sw_vers -buildVersion)) ==="
+          echo "Arch: $(uname -m)"
+          echo "CPU: $(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo 'Apple Silicon')"
+          echo "RAM: $(( $(sysctl -n hw.memsize) / 1073741824 )) GB"
+          echo "Disk libre: $(df -h / | tail -1 | awk '{print $4}')"
+          echo "Xcode: $(xcodebuild -version 2>/dev/null | head -1 || echo 'N/A')"
+
+      # ─────────────────────────────────────────────────────
+      # 2. HABILITAR VNC / SCREEN SHARING
+      # ─────────────────────────────────────────────────────
+      - name: "Habilitar VNC y Screen Sharing"
+        run: |
+          echo ">>> Configurando Apple Remote Desktop + VNC Legacy..."
+
+          # Paso 1: Configurar ARD con VNC Legacy habilitado
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+            -activate -configure -access -on \
+            -allowAccessFor -allUsers \
+            -privs -all \
+            -clientopts -setvnclegacy -vnclegacy yes \
+            -clientopts -setvncpw -vncpw "$VNC_PASSWORD" \
+            -restart -agent
+
+          # Paso 2: Escribir password VNC en formato DES obfuscado (método probado)
+          echo "$VNC_PASSWORD" | perl -we '
+            BEGIN { @k = unpack "C*", pack "H*", "1734516E8BA8C5E2FF1C39567390ADCA" };
+            $_ = <>; chomp; s/^(.{8}).*/$1/;
+            @p = unpack "C*", $_;
+            foreach (@k) { printf "%02X", $_ ^ (shift @p || 0) };
+            print "\n"
+          ' | sudo tee /Library/Preferences/com.apple.VNCSettings.txt > /dev/null
+
+          # Paso 3: Forzar VNC Legacy via defaults
+          sudo defaults write /Library/Preferences/com.apple.RemoteManagement VNCAlwaysStartOnConsole -bool true
+          sudo defaults write /Library/Preferences/com.apple.RemoteManagement VNCLegacyConnectionsEnabled -bool true
+
+          # Paso 4: Habilitar y cargar Screen Sharing
+          sudo launchctl enable system/com.apple.screensharing
+          sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null || true
+
+          # Paso 5: Reiniciar agente ARD para aplicar cambios
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+            -restart -agent -console
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+            -activate
+
+          # Esperar a que inicie
+          sleep 5
+
+          # Verificar
+          echo "=== Verificando puerto VNC 5900 ==="
+          if lsof -i :5900 2>/dev/null | grep -q LISTEN; then
+            echo "✅ VNC escuchando en puerto 5900"
+            lsof -i :5900
+          else
+            echo "⚠️ Puerto 5900 aún no escucha. Esperando 10s más..."
+            sleep 10
+            if lsof -i :5900 2>/dev/null | grep -q LISTEN; then
+              echo "✅ VNC escuchando en puerto 5900 (tras espera adicional)"
+            else
+              echo "⚠️ VNC no detectado en 5900. Mostrando puertos activos:"
+              netstat -an | grep -E '590[0-9]' || echo "Ningún puerto 590x activo"
+              echo "Servicios de screensharing:"
+              sudo launchctl list | grep -i screen || true
+            fi
+          fi
+
+      # ─────────────────────────────────────────────────────
+      # 3. noVNC (ACCESO DESDE NAVEGADOR)
+      # ─────────────────────────────────────────────────────
+      - name: "Instalar noVNC + websockify"
+        run: |
+          echo ">>> Instalando websockify..."
+          pip3 install websockify --break-system-packages 2>/dev/null || \
+          pip3 install websockify 2>/dev/null || \
+          python3 -m pip install websockify
+
+          echo ">>> Descargando noVNC..."
+          git clone --depth 1 https://github.com/novnc/noVNC.git /tmp/noVNC
+
+          echo ">>> Iniciando websockify (noVNC en puerto 6080)..."
+          websockify --web=/tmp/noVNC --heartbeat=30 6080 localhost:5900 &
+          sleep 3
+
+          if lsof -i :6080 2>/dev/null | grep -q LISTEN; then
+            echo "✅ noVNC corriendo en puerto 6080"
+          else
+            echo "Intentando ruta alternativa..."
+            python3 -m websockify --web=/tmp/noVNC --heartbeat=30 6080 localhost:5900 &
+            sleep 3
+            lsof -i :6080 || echo "⚠️ websockify no pudo iniciar"
+          fi
+
+      # ─────────────────────────────────────────────────────
+      # 4. CLOUDFLARE TUNNEL (URL PÚBLICA - GRATIS)
+      # ─────────────────────────────────────────────────────
+      - name: "Instalar cloudflared"
+        run: |
+          echo ">>> Instalando cloudflared..."
+          brew install cloudflare/cloudflare/cloudflared 2>/dev/null || \
+          brew install cloudflared 2>/dev/null || {
+            echo "Fallback: descarga directa..."
+            ARCH=$(uname -m)
+            if [ "$ARCH" = "arm64" ]; then
+              curl -sL "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-amd64.tgz" -o /tmp/cf.tgz
+            else
+              curl -sL "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-amd64.tgz" -o /tmp/cf.tgz
+            fi
+            tar xzf /tmp/cf.tgz -C /usr/local/bin/ 2>/dev/null || {
+              cd /tmp && tar xzf cf.tgz && sudo mv cloudflared /usr/local/bin/
+            }
+          }
+          cloudflared --version
+
+      - name: "Iniciar Cloudflare Tunnel (noVNC vía navegador)"
+        run: |
+          # Quick Tunnel: GRATIS, sin cuenta, genera URL en trycloudflare.com
+          cloudflared tunnel --url http://localhost:6080 --no-autoupdate > /tmp/cloudflared.log 2>&1 &
+
+          echo "Esperando URL de Cloudflare..."
+          NOVNC_URL=""
+          for i in $(seq 1 40); do
+            NOVNC_URL=$(grep -oE 'https://[a-zA-Z0-9._-]+\.trycloudflare\.com' /tmp/cloudflared.log | head -1)
+            if [ -n "$NOVNC_URL" ]; then
+              echo "NOVNC_URL=$NOVNC_URL" >> $GITHUB_ENV
+              echo "✅ Cloudflare Tunnel listo!"
+              echo ""
+              echo "═══════════════════════════════════════════════════"
+              echo "  ABRE ESTO EN TU NAVEGADOR:"
+              echo "  $NOVNC_URL/vnc.html?autoconnect=true&resize=scale"
+              echo "  Password: $VNC_PASSWORD"
+              echo "═══════════════════════════════════════════════════"
+              break
+            fi
+            sleep 2
+          done
+
+          if [ -z "$NOVNC_URL" ]; then
+            echo "⚠️ Cloudflare tunnel no pudo iniciar"
+            cat /tmp/cloudflared.log | tail -20
+          fi
+
+      # ─────────────────────────────────────────────────────
+      # 5. BORE.PUB (TÚNEL VNC DIRECTO - GRATIS)
+      # ─────────────────────────────────────────────────────
+      - name: "Instalar y lanzar bore (VNC directo)"
+        run: |
+          echo ">>> Descargando bore..."
+          ARCH=$(uname -m)
+          if [ "$ARCH" = "arm64" ]; then
+            BORE_URL="https://github.com/ekzhang/bore/releases/download/v0.5.1/bore-v0.5.1-aarch64-apple-darwin.tar.gz"
+          else
+            BORE_URL="https://github.com/ekzhang/bore/releases/download/v0.5.1/bore-v0.5.1-x86_64-apple-darwin.tar.gz"
+          fi
+
+          curl -sL "$BORE_URL" -o /tmp/bore.tar.gz
+          cd /tmp && tar xzf bore.tar.gz
+          sudo mv /tmp/bore /usr/local/bin/ 2>/dev/null || true
+          chmod +x /usr/local/bin/bore 2>/dev/null || true
+
+          echo ">>> Iniciando bore tunnel..."
+          bore local 5900 --to bore.pub > /tmp/bore.log 2>&1 &
+
+          echo "Esperando bore tunnel..."
+          BORE_ADDR=""
+          for i in $(seq 1 25); do
+            BORE_ADDR=$(grep -oE 'bore\.pub:[0-9]+' /tmp/bore.log | head -1)
+            if [ -n "$BORE_ADDR" ]; then
+              echo "BORE_VNC=$BORE_ADDR" >> $GITHUB_ENV
+              echo "✅ VNC directo disponible: $BORE_ADDR"
+              break
+            fi
+            sleep 2
+          done
+
+          if [ -z "$BORE_ADDR" ]; then
+            echo "⚠️ bore no disponible"
+            cat /tmp/bore.log | tail -10
+          fi
+
+      # ─────────────────────────────────────────────────────
+      # 6. SSH VÍA TMATE (BACKUP)
+      # ─────────────────────────────────────────────────────
+      - name: "SSH con tmate"
+        uses: mxschmitt/action-tmate@v3
+        timeout-minutes: 350
+        with:
+          detached: true
+
+      # ─────────────────────────────────────────────────────
+      # 7. HERRAMIENTAS DE DESARROLLO
+      # ─────────────────────────────────────────────────────
+      - name: "Configurar Xcode + Simulator"
+        run: |
+          sudo xcodebuild -license accept 2>/dev/null || true
+          sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer 2>/dev/null || true
+
+          # Iniciar Simulator
+          DEVICE_UUID=$(xcrun simctl list devices available | grep "iPhone 16 Pro (" | head -1 | grep -oE '[A-F0-9-]{36}')
+          if [ -n "$DEVICE_UUID" ]; then
+            xcrun simctl boot "$DEVICE_UUID" 2>/dev/null || true
+            open -a Simulator 2>/dev/null || true
+            echo "✅ Simulator: iPhone 16 Pro ($DEVICE_UUID)"
+          else
+            echo "⚠️ iPhone 16 Pro no encontrado, listando disponibles:"
+            xcrun simctl list devices available | head -20
+          fi
+
+      - name: "Instalar .NET MAUI (opcional)"
+        continue-on-error: true
+        run: |
+          if command -v dotnet &>/dev/null; then
+            echo "dotnet $(dotnet --version) ya disponible"
+          else
+            brew install --cask dotnet-sdk || true
+          fi
+          sudo dotnet workload install maui ios maccatalyst --skip-manifest-update 2>/dev/null || true
+          echo "✅ .NET MAUI configurado"
+
+      - name: "Instalar Java + CocoaPods (opcional)"
+        continue-on-error: true
+        run: |
+          brew install openjdk@17 2>/dev/null || true
+          sudo ln -sfn /opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk /Library/Java/JavaVirtualMachines/openjdk-17.jdk 2>/dev/null || true
+          sudo gem install cocoapods 2>/dev/null || true
+          echo "✅ Java + CocoaPods configurados"
+
+      # ─────────────────────────────────────────────────────
+      # 8. RESUMEN DE CONEXIÓN
+      # ─────────────────────────────────────────────────────
+      - name: "═══ CÓMO CONECTARTE ═══"
+        run: |
+          echo ""
+          echo "╔══════════════════════════════════════════════════════════════════╗"
+          echo "║       🖥️  macOS ESCRITORIO REMOTO - LISTO PARA USAR            ║"
+          echo "╚══════════════════════════════════════════════════════════════════╝"
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  OPCIÓN A: NAVEGADOR - Sin instalar NADA (RECOMENDADO)"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          if [ -n "$NOVNC_URL" ]; then
+            echo ""
+            echo "  1. Abre este enlace en Chrome/Edge/Firefox:"
+            echo ""
+            echo "     $NOVNC_URL/vnc.html?autoconnect=true&resize=scale"
+            echo ""
+            echo "  2. Cuando pida Password: $VNC_PASSWORD"
+            echo ""
+            echo "  ¡Eso es todo! Verás el escritorio de macOS directamente."
+          else
+            echo "  ⚠️ Cloudflare tunnel no disponible"
+          fi
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  OPCIÓN B: CLIENTE VNC (TightVNC / RealVNC Viewer)"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          if [ -n "$BORE_VNC" ]; then
+            echo ""
+            echo "  1. Descarga TightVNC Viewer o RealVNC Viewer:"
+            echo "     https://www.tightvnc.com/download.php"
+            echo "     https://www.realvnc.com/en/connect/download/viewer/"
+            echo ""
+            echo "  2. En 'Remote Host' / 'VNC Server': $BORE_VNC"
+            echo ""
+            echo "  3. Password: $VNC_PASSWORD"
+          else
+            echo "  ⚠️ bore tunnel no disponible"
+          fi
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  OPCIÓN C: SSH (línea de comandos)"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  Busca arriba el paso 'SSH con tmate' para el comando SSH."
+          echo ""
+          echo "  Comandos útiles via SSH:"
+          echo "    screencapture ~/screen.png   # Captura de pantalla"
+          echo "    open -a Safari               # Abrir Safari"
+          echo "    open -a Simulator            # Abrir Simulator iOS"
+          echo "    xcrun simctl io booted screenshot ~/sim.png"
+          echo ""
+          echo "══════════════════════════════════════════════════════════════════"
+
+      - name: "Escribir Summary"
+        run: |
+          echo "## 🖥️ macOS Escritorio Remoto" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### 🌐 Opción A: Navegador (RECOMENDADO)" >> $GITHUB_STEP_SUMMARY
+          if [ -n "$NOVNC_URL" ]; then
+            echo "👉 **[Abrir macOS en el navegador]($NOVNC_URL/vnc.html?autoconnect=true&resize=scale)**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Password: \`$VNC_PASSWORD\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Tunnel de Cloudflare no disponible" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### 🔌 Opción B: Cliente VNC (TightVNC / RealVNC)" >> $GITHUB_STEP_SUMMARY
+          if [ -n "$BORE_VNC" ]; then
+            echo "- Servidor: \`$BORE_VNC\`" >> $GITHUB_STEP_SUMMARY
+            echo "- Password: \`$VNC_PASSWORD\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Tunnel de bore no disponible" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### 💻 Opción C: SSH" >> $GITHUB_STEP_SUMMARY
+          echo "Ver paso **SSH con tmate** en los logs." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "**Herramientas instaladas:** Xcode, iOS Simulator, .NET MAUI, Java 17, CocoaPods" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> Sesión activa por ~6 horas. Cancela el workflow para terminar antes." >> $GITHUB_STEP_SUMMARY
+
+      # ─────────────────────────────────────────────────────
+      # 9. MANTENER ACTIVO
+      # ─────────────────────────────────────────────────────
+      - name: "Mantener activo (6 horas)"
+        run: |
+          echo "Sesión activa. Puedes cancelar el workflow en cualquier momento."
+          echo "Expira automáticamente en ~6 horas."
+          sleep 21600
