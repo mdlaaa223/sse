@@ -174,23 +174,31 @@ jobs:
           sudo chown root:wheel /etc/kcpassword
 
           # ══════════════════════════════════════════════════
-          # REINICIAR LOGINWINDOW → DISPARA AUTO-LOGIN
-          # Esto crea la sesión GUI de escritorio para $GUI_USER
-          # El runner (SSH/CI) NO se ve afectado
+          # ACTIVAR SESIÓN GUI SIN MATAR LOGINWINDOW
+          # (killall loginwindow mata el runner → exit 143)
+          # Usamos launchctl kickstart que es seguro para el runner
           # ══════════════════════════════════════════════════
-          echo ">>> Reiniciando loginwindow para activar desktop..."
-          sudo killall loginwindow 2>/dev/null || true
-          echo "Esperando que loginwindow reinicie y auto-login complete..."
-          sleep 12
+          echo ">>> Activando sesión GUI..."
+
+          # Método 1: kickstart reinicia loginwindow via launchd (no mata el runner)
+          sudo launchctl kickstart -kp system/com.apple.loginwindow 2>/dev/null || true
+          sleep 8
+
+          # Método 2: Si loginwindow no respondió, forzar login del usuario GUI
+          # creando su sesión sin tocar loginwindow
+          sudo launchctl asuser $(id -u $GUI_USER 2>/dev/null || echo 550) launchctl load -S Aqua /System/Library/LaunchAgents/com.apple.Finder.plist 2>/dev/null || true
+          sudo launchctl asuser $(id -u $GUI_USER 2>/dev/null || echo 550) launchctl load -S Aqua /System/Library/LaunchAgents/com.apple.Dock.plist 2>/dev/null || true
+          sleep 4
 
           # Despertar display
           caffeinate -u -t 5 &
           sleep 2
 
           # Abrir apps para forzar renderizado del escritorio
-          sudo -u $GUI_USER open -a Finder 2>/dev/null || open -a Finder 2>/dev/null || true
+          # (usa el usuario actual runner que ya tiene sesión GUI)
+          open -a Finder 2>/dev/null || true
           sleep 2
-          sudo -u $GUI_USER open -a TextEdit 2>/dev/null || open -a TextEdit 2>/dev/null || true
+          open -a TextEdit 2>/dev/null || true
           sleep 1
 
           # Caffeinate permanente
