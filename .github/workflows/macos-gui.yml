@@ -378,7 +378,10 @@ jobs:
             fi
             sleep 2
           done
-          [ -z "$BORE_ADDR" ] && echo "⚠️ bore no disponible" && tail -10 /tmp/bore.log
+          if [ -z "$BORE_ADDR" ]; then
+            echo "⚠️ bore no disponible"
+            tail -10 /tmp/bore.log
+          fi
 
       # ─────────────────────────────────────────────────────
       # 9. SSH VÍA TMATE (BACKUP)
