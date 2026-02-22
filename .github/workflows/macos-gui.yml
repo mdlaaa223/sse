@@ -26,7 +26,50 @@ jobs:
           echo "Xcode: $(xcodebuild -version 2>/dev/null | head -1 || echo 'N/A')"
 
       # ─────────────────────────────────────────────────────
-      # 2. HABILITAR VNC / SCREEN SHARING
+      # 2. ACTIVAR SESIÓN GUI (CLAVE PARA EVITAR PANTALLA NEGRA)
+      # ─────────────────────────────────────────────────────
+      - name: "Activar sesión GUI del escritorio"
+        run: |
+          CURRENT_USER=$(whoami)
+          echo "Usuario: $CURRENT_USER"
+
+          # Auto-login para que macOS cargue el escritorio
+          sudo defaults write /Library/Preferences/com.apple.loginwindow autoLoginUser "$CURRENT_USER"
+
+          # Crear un usuario VNC dedicado con password conocida
+          sudo sysadminctl -addUser vncuser -password "$VNC_PASSWORD" -admin 2>/dev/null || true
+
+          # Forzar que el WindowServer renderice el escritorio
+          open -a Finder
+          sleep 2
+          open -a TextEdit
+          sleep 1
+
+          # Verificar que hay sesión gráfica
+          if pgrep -x WindowServer > /dev/null; then
+            echo "✅ WindowServer está corriendo"
+          else
+            echo "⚠️ WindowServer no encontrado"
+          fi
+
+          if pgrep -x Dock > /dev/null; then
+            echo "✅ Dock está corriendo (escritorio activo)"
+          else
+            echo "⚠️ Dock no está corriendo, intentando activar..."
+            open -a Dock 2>/dev/null || true
+            sleep 2
+          fi
+
+          # Captura de prueba para verificar que hay display
+          screencapture /tmp/test_display.png 2>/dev/null
+          if [ -f /tmp/test_display.png ] && [ $(stat -f%z /tmp/test_display.png 2>/dev/null || echo 0) -gt 1000 ]; then
+            echo "✅ Display activo (screenshot tomado: $(stat -f%z /tmp/test_display.png) bytes)"
+          else
+            echo "⚠️ Display puede no estar activo"
+          fi
+
+      # ─────────────────────────────────────────────────────
+      # 3. HABILITAR VNC / SCREEN SHARING
       # ─────────────────────────────────────────────────────
       - name: "Habilitar VNC y Screen Sharing"
         run: |
@@ -86,7 +129,7 @@ jobs:
           fi
 
       # ─────────────────────────────────────────────────────
-      # 3. noVNC (ACCESO DESDE NAVEGADOR)
+      # 4. noVNC (ACCESO DESDE NAVEGADOR)
       # ─────────────────────────────────────────────────────
       - name: "Instalar noVNC + websockify"
         run: |
@@ -97,6 +140,15 @@ jobs:
 
           echo ">>> Descargando noVNC..."
           git clone --depth 1 https://github.com/novnc/noVNC.git /tmp/noVNC
+
+          # Crear redirect index.html para que la URL raíz vaya directo a vnc.html
+          cat > /tmp/noVNC/index.html << 'REDIRECT'
+          <!DOCTYPE html>
+          <html>
+          <head><meta http-equiv="refresh" content="0;url=vnc.html?autoconnect=true&resize=scale"></head>
+          <body>Redirecting to noVNC...</body>
+          </html>
+          REDIRECT
 
           echo ">>> Iniciando websockify (noVNC en puerto 6080)..."
           websockify --web=/tmp/noVNC --heartbeat=30 6080 localhost:5900 &
@@ -112,7 +164,7 @@ jobs:
           fi
 
       # ─────────────────────────────────────────────────────
-      # 4. CLOUDFLARE TUNNEL (URL PÚBLICA - GRATIS)
+      # 5. CLOUDFLARE TUNNEL (URL PÚBLICA - GRATIS)
       # ─────────────────────────────────────────────────────
       - name: "Instalar cloudflared"
         run: |
@@ -161,7 +213,7 @@ jobs:
           fi
 
       # ─────────────────────────────────────────────────────
-      # 5. BORE.PUB (TÚNEL VNC DIRECTO - GRATIS)
+      # 6. BORE.PUB (TÚNEL VNC DIRECTO - GRATIS)
       # ─────────────────────────────────────────────────────
       - name: "Instalar y lanzar bore (VNC directo)"
         run: |
@@ -199,7 +251,7 @@ jobs:
           fi
 
       # ─────────────────────────────────────────────────────
-      # 6. SSH VÍA TMATE (BACKUP)
+      # 7. SSH VÍA TMATE (BACKUP)
       # ─────────────────────────────────────────────────────
       - name: "SSH con tmate"
         uses: mxschmitt/action-tmate@v3
@@ -208,7 +260,7 @@ jobs:
           detached: true
 
       # ─────────────────────────────────────────────────────
-      # 7. HERRAMIENTAS DE DESARROLLO
+      # 8. HERRAMIENTAS DE DESARROLLO
       # ─────────────────────────────────────────────────────
       - name: "Configurar Xcode + Simulator"
         run: |
@@ -246,7 +298,7 @@ jobs:
           echo "✅ Java + CocoaPods configurados"
 
       # ─────────────────────────────────────────────────────
-      # 8. RESUMEN DE CONEXIÓN
+      # 9. RESUMEN DE CONEXIÓN
       # ─────────────────────────────────────────────────────
       - name: "═══ CÓMO CONECTARTE ═══"
         run: |
@@ -334,7 +386,7 @@ jobs:
           echo "> Sesión activa por ~6 horas. Cancela el workflow para terminar antes." >> $GITHUB_STEP_SUMMARY
 
       # ─────────────────────────────────────────────────────
-      # 9. MANTENER ACTIVO
+      # 10. MANTENER ACTIVO
       # ─────────────────────────────────────────────────────
       - name: "Mantener activo (6 horas)"
         run: |
